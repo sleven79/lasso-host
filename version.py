@@ -24,9 +24,12 @@ def gitrev():
     f = open('src/lasso_version.h.in')
     template = f.read()
     rev = get_git_describe()
-    rx_non_decimal = re.compile(r'[^\d.]+')
+    rx_non_decimal = re.compile(r'[\D.]+')
+    revnum = rx_non_decimal.sub('.', rev).split('.')[1:4]
+    #print(rx_non_decimal.sub('.', rev))
+    #print(revnum)
     with open('src/lasso_version.h', 'w') as out:
-        out.write(template % {'revision_num': rx_non_decimal.sub('', rev),
+        out.write(template % {'revision_num': '{}{}{}'.format(*[str.zfill(4) for str in revnum]),
                               'revision_str': rev[1:]})
 
 gitrev()

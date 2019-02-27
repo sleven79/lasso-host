@@ -2,7 +2,7 @@
 #
 # An example hook script for version generation after each commit.
 #
-# To enable this hook, rename this file to "post-commit".
+# To enable this hook, rename this file to "post-commit". Note: no file extension. Requires Python.
 
 echo "Version generation started"
 python version.py

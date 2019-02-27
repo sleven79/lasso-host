@@ -147,6 +147,7 @@
 // Lasso host parameters
 #ifndef LASSO_HOST_PROTOCOL_VERSION     // usually pulled from "lasso_version.h"
 #define LASSO_HOST_PROTOCOL_VERSION         0.0     //!< host protocol version
+#define LASSO_HOST_PROTOCOL_VERSION_NUM     0       //!< integer version number
 #endif
 
 // Lasso host input commands (valid commands are in ASCII space 0...127)
@@ -1441,8 +1442,11 @@ static void lasso_hostInterpreteCommand (void) {
                             break;
                         }
                     #else
-                        // todo
-                        *responseBuffer++ = (uint8_t)LASSO_HOST_PROTOCOL_VERSION;
+                        // todo (obsolete since Feb 27, 2019)
+                        *responseBuffer++ = (uint8_t)(LASSO_HOST_PROTOCOL_VERSION_NUM >> 24);
+                        *responseBuffer++ = (uint8_t)(LASSO_HOST_PROTOCOL_VERSION_NUM >> 16);
+                        *responseBuffer++ = (uint8_t)(LASSO_HOST_PROTOCOL_VERSION_NUM >> 8);
+                        *responseBuffer++ = (uint8_t)(LASSO_HOST_PROTOCOL_VERSION_NUM);
                     #endif
 
                         tiny_reply = false;
