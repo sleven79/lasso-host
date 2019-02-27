@@ -1,0 +1,9 @@
+#!/bin/sh; C:/Users/s.leven/AppData/Local/GitHubDesktop/app-1.6.2/resources/app/git/usr/bin/sh.exe
+#
+# An example hook script for version generation after each commit.
+#
+# To enable this hook, rename this file to "post-commit".
+
+echo "Version generation started"
+python version.py
+echo "Version generation finished"
