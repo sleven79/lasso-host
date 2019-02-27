@@ -115,6 +115,7 @@
 //----------//
 
 #include "lasso_host.h"
+#include "lasso_host_ver.h"
 
 #ifdef INCLUDE_LASSO_HOST       // refer to "lasso_host_config.h"
 
@@ -144,12 +145,11 @@
 //---------//
 
 // Lasso host parameters
-#define LASSO_HOST_PROTOCOL_VERSION         1.1     //!< host protocol version
+#ifndef LASSO_HOST_PROTOCOL_VERSION     // usually pulled from "lasso_version.h"
+#define LASSO_HOST_PROTOCOL_VERSION         0.0     //!< host protocol version
+#endif
 
-// Lasso host input commands
-#define LASSO_HOST_INVALID_OPCODE           (0x00)  //!< invalid command
-        // corresponds to msgpack's invalid command, and should not be in ASCII space 0...127
-
+// Lasso host input commands (valid commands are in ASCII space 0...127)
 #define LASSO_HOST_SET_ADVERTISE            'A'     //!< enable advertising
 #define LASSO_HOST_SET_STROBE_PERIOD        'P'     //!< set strobe period
 #define LASSO_HOST_SET_DATACELL_STROBE      'S'     //!< set data cell strobe
@@ -1847,7 +1847,7 @@ static void lasso_hostInterpreteCommand (void) {
                         break;
                     }
 
-                    default : {     // e.g. LASSO_HOST_INVALID_OPCODE
+                    default : {
                         msg_err = EOPNOTSUPP;
                     }
                 }
