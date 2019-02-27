@@ -1,0 +1,4 @@
+Need to rename extension "lasso_host.c" in "lasso_host.cpp".
+Same for any other .c file.
+
+Check if this is true when adding "#ifdef __cplusplus" to function declarations in .h files.
