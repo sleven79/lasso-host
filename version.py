@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+# This file is used to generate a .h file with the last git commit's revision number.
+
 import os
 import subprocess
 import re
