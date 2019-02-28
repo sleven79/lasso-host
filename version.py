@@ -35,25 +35,20 @@ def get_git_revision_short_hash():
 def get_git_describe():
     val = subprocess.check_output([gitpath + '/git', 'describe', '--tags', '--always'])
     #print(val)
-    return val.decode()
+    return val.decode().strip()
 
 def gitrev():
     """Generate the header file that contains the git revision."""
     f = open('src/lasso_version.h.in')
     template = f.read()
     rev = get_git_describe()
-    rx_non_decimal = re.compile(r'[\D.]+')
-    # extract 3 first numbers from rev (major, minor, patch)
-    # 1) replace all non-digit chars and chains of chars by a single '.'
-    # 2) split string along '.'
-    # 3) extract elements 1-4 (element 0 is empty string)
-    revnum = rx_non_decimal.sub('.', rev)
-    revnum = revnum.split('.')
-    if len(revnum) == 6:
-        revnum = revnum[1:5]    # if <# commits> tag available
+    rx_numbers = re.compile(r'(-g[\S]*|[\d]+)')
+    # extract 3(4) first numbers from rev (major, minor, patch, and possibly # of commits)
+    revnum = re.findall(rx_numbers, rev)
+    if len(revnum) == 5:
+        revnum = revnum[0:4]    # if <# commits> tag available
     else:
-        revnum = revnum[1:4] + ['0']
-    #print(rx_non_decimal.sub('.', rev))
+        revnum = revnum[0:3] + ['0']
     #print(revnum)
     with open('src/lasso_version.h', 'w') as out:
         out.write(template % {'revision_num': '0x{:02X}{:02X}{:02X}{:02X}'.format(*[int(r) for r in revnum]),
