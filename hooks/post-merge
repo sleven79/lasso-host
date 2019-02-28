@@ -2,8 +2,9 @@
 #
 # An example hook script for version generation after each commit.
 #
-# To enable this hook, rename this file to "post-commit". Note: no file extension. Requires Python.
+# To enable this hook, rename this file to "post-merge".
+#
+# Note: no file extension. Requires Python 3.x.
 
-echo "Version generation started"
 python version.py
-echo "Version generation finished"
+echo "Version information generated after merge"
