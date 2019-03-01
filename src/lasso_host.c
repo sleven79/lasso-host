@@ -115,7 +115,7 @@
 //----------//
 
 #include "lasso_host.h"
-#include "lasso_host_ver.h"
+#include "lasso_version.h"
 
 #ifdef INCLUDE_LASSO_HOST       // refer to "lasso_host_config.h"
 
@@ -151,6 +151,7 @@
 #endif
 
 // Lasso host input commands (valid commands are in ASCII space 0...127)
+#define LASSO_HOST_INVALID_OPCODE           (0)     //!< invalid opcode
 #define LASSO_HOST_SET_ADVERTISE            'A'     //!< enable advertising
 #define LASSO_HOST_SET_STROBE_PERIOD        'P'     //!< set strobe period
 #define LASSO_HOST_SET_DATACELL_STROBE      'S'     //!< set data cell strobe
@@ -684,7 +685,7 @@ static void lasso_hostSampleDataCells (void) {
     #if (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_COBS)
         strobe.Bytes_total = dataSpaceBufferPtr - strobe.buffer - 2;
     #elif (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_ESCS)
-        strobe.Bytes_total = dataSpaceBufferPtr - strobe.Bytes_max;
+        strobe.Bytes_total = dataSpaceBufferPtr - strobe.buffer - strobe.Bytes_max;
     #endif
 #endif
 
@@ -1327,8 +1328,11 @@ static int32_t lasso_hostGetCycleMargin (void) {
  *
  *  \return Void
  */
-static void lasso_hostInterpreteCommand (void) {
+static void lasso_hostInterpreteCommand (
+    int32_t rx_err             //!< receive buffer overflow? incomplete command?
+) {
     int32_t  msg_err = 0;       // error during message processing
+    
 #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
     uint32_t opcode;            // opcode ID
 #else
@@ -1379,551 +1383,576 @@ static void lasso_hostInterpreteCommand (void) {
     PackReaderSetBuffer(&frame_reader, receiveBuffer, response.valid);
     PackReaderOpen(&frame_reader, E_PackTypeArray, &nargs);
 
-    if (nargs == 2) {       // expect 1) opcode and 2) array of params
+    if (nargs > 0) {    // receive at least expected opcode
         msg_err = PackReaderGetUnsignedInteger(&frame_reader, &opcode);
-
+    else {
+        opcode = LASSO_HOST_INVALID_OPCODE;
+        msg_err = ENOMSG;
+    }
+    
+    if (nargs != 2) { // expect 1) opcode and 2) array of params
+        msg_err = ENOMSG;   
+    }
+    
+    if (rx_err != 0) {  // receive buffer overflow? incomplete command?
+        msg_err = rx_err;
+    }
+    
+    // prepare response frame
+    PackWriterSetBuffer(&frame_writer, responseBuffer, LASSO_HOST_RESPONSE_BUFFER_SIZE);
+    PackWriterOpen(&frame_writer, E_PackTypeArray, 3);
+    PackWriterPutUnsignedInteger(&frame_writer, opcode);    // send opcode back          
+        
+    if (msg_err == 0) { // if ok so far, start reading parameter array
+        msg_err = PackReaderOpen(&frame_reader, E_PackTypeArray, &nargs);
+            
         if (msg_err == 0) {
-            msg_err = PackReaderOpen(&frame_reader, E_PackTypeArray, &nargs);
-
-            if (msg_err == 0) {
+            
 #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
     msg_err = sscanf((const char*)receiverBuffer++, "%c", &opcode);
-    if (msg_err == 1) {
-        msg_err = 0;
-
-        msg_err = sprintf((char*)responseBuffer++, "%c", opcode);
+    if (msg_err == 1) { // received the expected opcode
+        msg_err = sprintf((char*)responseBuffer++, "%c", opcode);        
+        
         if (msg_err == 1) {
             msg_err = 0;
-            {
+        }
+    }
+    else {
+        opcode = LASSO_HOST_INVALID_OPCODE;
+        msg_err = ENOMSG;
+    }
+    
+    if (rx_err != 0) {  // receive buffer overflow? incomplete command?
+        msg_err = rx_err;
+    }
+
+    if (msg_err == 0) {
+        {
+            
 #else
     // future option, todo
     opcode = *receiverBuffer++;  // max. 256 opcodes allowed here, but some are reserved, e.g. 0 = invalid opcode
     *responseBuffer++ = opcode;
     {
         {
-            {
+            
 #endif
-            // Unless COBS or ESC encoding has been chosen for command/response and strobe frames:
-            // - for GET command opcodes (>= 'a'), response & strobe interleaving is impossible
-            // - for SET command opcodes (>= 'A'), each command deals with the issue differently
-            #if (LASSO_HOST_STROBE_ENCODING < LASSO_ENCODING_COBS)
-                if ((lasso_strobing) && (opcode >= 'a')) {
-                    return;
-                }
-            #endif
+        // Unless COBS or ESC encoding has been chosen for command/response and strobe frames:
+        // - for GET command opcodes (>= 'a'), response & strobe interleaving is impossible
+        // - for SET command opcodes (>= 'A'), each command deals with the issue differently
+        #if (LASSO_HOST_STROBE_ENCODING < LASSO_ENCODING_COBS)
+            if ((lasso_strobing) && (opcode >= 'a')) {
+                return;
+            }
+        #endif
+        
+            switch (opcode) {
+                // LASSO_HOST_GET_x functions
+                case LASSO_HOST_GET_PROTOCOL_INFO : {
 
-            #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-                // prepare response frame
-                PackWriterSetBuffer(&frame_writer, responseBuffer, LASSO_HOST_RESPONSE_BUFFER_SIZE);
-                PackWriterOpen(&frame_writer, E_PackTypeArray, 3);
-                PackWriterPutUnsignedInteger(&frame_writer, opcode);    // send opcode back
-            #endif
-
-                switch (opcode) {
-                    // LASSO_HOST_GET_x functions
-                    case LASSO_HOST_GET_PROTOCOL_INFO : {
-
-                    #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-                        PackWriterOpen(&frame_writer, E_PackTypeArray, 2);
-                        PackWriterPutUnsignedInteger(&frame_writer, lasso_protocol_info);
-                        PackWriterPutString(&frame_writer, (char*)&lasso_version);
-                    #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
-                        msg_err = sprintf((char*)responseBuffer, "%lu,", (unsigned long)lasso_protocol_info);
-                        if (msg_err > 0) {
-                            responseBuffer += msg_err;
-                            msg_err = sprintf((char*)responseBuffer, "v%s,", TOSTR(LASSO_HOST_PROTOCOL_VERSION));
-                        }
-                        if (msg_err > 0) {
-                            responseBuffer += msg_err;
-                            msg_err = 0;
-                        }
-                        else {
-                            msg_err = ECANCELED;
-                            break;
-                        }
-                    #else
-                        // todo (obsolete since Feb 27, 2019)
-                        *responseBuffer++ = (uint8_t)(LASSO_HOST_PROTOCOL_VERSION_NUM >> 24);
-                        *responseBuffer++ = (uint8_t)(LASSO_HOST_PROTOCOL_VERSION_NUM >> 16);
-                        *responseBuffer++ = (uint8_t)(LASSO_HOST_PROTOCOL_VERSION_NUM >> 8);
-                        *responseBuffer++ = (uint8_t)(LASSO_HOST_PROTOCOL_VERSION_NUM);
-                    #endif
-
-                        tiny_reply = false;
+                #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
+                    PackWriterOpen(&frame_writer, E_PackTypeArray, 2);
+                    PackWriterPutUnsignedInteger(&frame_writer, lasso_protocol_info);
+                    PackWriterPutString(&frame_writer, (char*)&lasso_version);
+                #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
+                    msg_err = sprintf((char*)responseBuffer, "%lu,", (unsigned long)lasso_protocol_info);
+                    if (msg_err > 0) {
+                        responseBuffer += msg_err;
+                        msg_err = sprintf((char*)responseBuffer, "v%s,", TOSTR(LASSO_HOST_PROTOCOL_VERSION));
+                    }
+                    if (msg_err > 0) {
+                        responseBuffer += msg_err;
+                        msg_err = 0;
+                    }
+                    else {
+                        msg_err = ECANCELED;
                         break;
                     }
+                #else
+                    // todo (obsolete since Feb 27, 2019)
+                    *responseBuffer++ = (uint8_t)(LASSO_HOST_PROTOCOL_VERSION_NUM >> 24);
+                    *responseBuffer++ = (uint8_t)(LASSO_HOST_PROTOCOL_VERSION_NUM >> 16);
+                    *responseBuffer++ = (uint8_t)(LASSO_HOST_PROTOCOL_VERSION_NUM >> 8);
+                    *responseBuffer++ = (uint8_t)(LASSO_HOST_PROTOCOL_VERSION_NUM);
+                #endif
 
-                    case LASSO_HOST_GET_TIMING_INFO : {
+                    tiny_reply = false;
+                    break;
+                }
 
-                    #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-                        PackWriterOpen(&frame_writer, E_PackTypeArray, 7);
-                        PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)lasso_tick_period);
-                        PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)LASSO_HOST_COMMAND_TIMEOUT_TICKS);
-                        PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)lasso_roundtrip_latency_ticks);
-                        PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)LASSO_HOST_STROBE_PERIOD_MIN_TICKS);
-                        PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)LASSO_HOST_STROBE_PERIOD_MAX_TICKS);
-                        PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)lasso_strobe_period);
-                        PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)lasso_hostGetCycleMargin());
-                    #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
-                        msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)lasso_tick_period);
+                case LASSO_HOST_GET_TIMING_INFO : {
+
+                #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
+                    PackWriterOpen(&frame_writer, E_PackTypeArray, 7);
+                    PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)lasso_tick_period);
+                    PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)LASSO_HOST_COMMAND_TIMEOUT_TICKS);
+                    PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)lasso_roundtrip_latency_ticks);
+                    PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)LASSO_HOST_STROBE_PERIOD_MIN_TICKS);
+                    PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)LASSO_HOST_STROBE_PERIOD_MAX_TICKS);
+                    PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)lasso_strobe_period);
+                    PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)lasso_hostGetCycleMargin());
+                #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
+                    msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)lasso_tick_period);
+                    if (msg_err > 0) {
+                        responseBuffer += msg_err;
+
+                        msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)LASSO_HOST_COMMAND_TIMEOUT_TICKS);
                         if (msg_err > 0) {
                             responseBuffer += msg_err;
 
-                            msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)LASSO_HOST_COMMAND_TIMEOUT_TICKS);
+                            msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)lasso_roundtrip_latency_ticks);
                             if (msg_err > 0) {
                                 responseBuffer += msg_err;
 
-                                msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)lasso_roundtrip_latency_ticks);
+                                msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)LASSO_HOST_STROBE_PERIOD_MIN_TICKS);
                                 if (msg_err > 0) {
                                     responseBuffer += msg_err;
 
-                                    msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)LASSO_HOST_STROBE_PERIOD_MIN_TICKS);
+                                    msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)LASSO_HOST_STROBE_PERIOD_MAX_TICKS);
                                     if (msg_err > 0) {
                                         responseBuffer += msg_err;
 
-                                        msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)LASSO_HOST_STROBE_PERIOD_MAX_TICKS);
+                                        msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)lasso_strobe_period);
                                         if (msg_err > 0) {
                                             responseBuffer += msg_err;
 
-                                            msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)lasso_strobe_period);
-                                            if (msg_err > 0) {
-                                                responseBuffer += msg_err;
-
-                                                msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)lasso_hostGetCycleMargin());
-                                            }
+                                            msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)lasso_hostGetCycleMargin());
                                         }
                                     }
                                 }
                             }
                         }
-                        if (msg_err > 0) {
-                            responseBuffer += msg_err;
-                            msg_err = 0;
-                        }
-                        else {
-                            msg_err = ECANCELED;
-                            break;
-                        }
-                    #else
-                        // todo
-                        *(float*)responseBuffer++ = (float)LASSO_TICK_HOST_PERIOD_MS;
-                    #endif
+                    }
+                    if (msg_err > 0) {
+                        responseBuffer += msg_err;
+                        msg_err = 0;
+                    }
+                    else {
+                        msg_err = ECANCELED;
+                        break;
+                    }
+                #else
+                    // todo
+                    *(float*)responseBuffer++ = (float)LASSO_TICK_HOST_PERIOD_MS;
+                #endif
 
-                        tiny_reply = false;
+                    tiny_reply = false;
+                    break;
+                }
+
+                case LASSO_HOST_GET_DATACELL_COUNT : {
+
+                #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
+                     PackWriterOpen(&frame_writer, E_PackTypeArray, 1);
+                     PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)dataCellCount);
+                #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
+                    msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)dataCellCount);
+                    if (msg_err > 0) {
+                        responseBuffer += msg_err;
+                        msg_err = 0;
+                    }
+                    else {
+                        msg_err = ECANCELED;
+                        break;
+                    }
+                #else
+                    // todo
+                    *responseBuffer++ = (uint8_t)dataCellCount;
+                #endif
+
+                    tiny_reply = false;
+                    break;
+                }
+
+                case LASSO_HOST_GET_DATACELL_PARAMS : {
+
+                #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
+                    msg_err = PackReaderGetUnsignedInteger(&frame_reader, &lparam);
+                    cparam = (uint8_t)lparam;
+                #else
+                    msg_err = lasso_hostGetDatacellNumber(&receiverBuffer, &cparam);
+                #endif
+                    if (msg_err) break;
+                    dC = lasso_hostSeekDatacell(cparam, &lparam);
+
+                    if (dC) {
+                #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
+                        PackWriterOpen(&frame_writer, E_PackTypeArray, 6);
+                        PackWriterPutString(&frame_writer, dC->name);
+                        PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)dC->type);
+                        PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)dC->count);
+                        PackWriterPutString(&frame_writer, dC->unit);
+                        PackWriterPutUnsignedInteger(&frame_writer, dC->update_rate >> 16);
+                        PackWriterPutUnsignedInteger(&frame_writer, lparam);
+                #else
+                        lasso_copyDatacellParams(dC, &responseBuffer, lparam);
+                #endif
+                    }
+                    else {
+                        msg_err = EFAULT;
                         break;
                     }
 
-                    case LASSO_HOST_GET_DATACELL_COUNT : {
+                    tiny_reply = false;
+                    break;
+                }
 
-                    #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-                         PackWriterOpen(&frame_writer, E_PackTypeArray, 1);
-                         PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)dataCellCount);
-                    #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
-                        msg_err = sprintf((char*)responseBuffer, "%li,", (signed long)dataCellCount);
-                        if (msg_err > 0) {
-                            responseBuffer += msg_err;
-                            msg_err = 0;
-                        }
-                        else {
-                            msg_err = ECANCELED;
-                            break;
-                        }
-                    #else
-                        // todo
-                        *responseBuffer++ = (uint8_t)dataCellCount;
-                    #endif
+                case LASSO_HOST_GET_DATACELL_VALUE : {
 
-                        tiny_reply = false;
-                        break;
-                    }
+                #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
+                    msg_err = PackReaderGetUnsignedInteger(&frame_reader, &lparam);
+                    cparam = (uint8_t)lparam;
+                #else
+                    msg_err = lasso_hostGetDatacellNumber(&receiverBuffer, &cparam);
+                #endif
+                    if (msg_err) break;
+                    dC = lasso_hostSeekDatacell(cparam, &lparam);
 
-                    case LASSO_HOST_GET_DATACELL_PARAMS : {
-
-                    #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-                        msg_err = PackReaderGetUnsignedInteger(&frame_reader, &lparam);
-                        cparam = (uint8_t)lparam;
-                    #else
-                        msg_err = lasso_hostGetDatacellNumber(&receiverBuffer, &cparam);
-                    #endif
-                        if (msg_err) break;
-                        dC = lasso_hostSeekDatacell(cparam, &lparam);
-
-                        if (dC) {
-                    #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-                            PackWriterOpen(&frame_writer, E_PackTypeArray, 6);
-                            PackWriterPutString(&frame_writer, dC->name);
-                            PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)dC->type);
-                            PackWriterPutUnsignedInteger(&frame_writer, (uint32_t)dC->count);
-                            PackWriterPutString(&frame_writer, dC->unit);
-                            PackWriterPutUnsignedInteger(&frame_writer, dC->update_rate >> 16);
-                            PackWriterPutUnsignedInteger(&frame_writer, lparam);
-                    #else
-                            lasso_copyDatacellParams(dC, &responseBuffer, lparam);
-                    #endif
-                        }
-                        else {
-                            msg_err = EFAULT;
-                            break;
-                        }
-
-                        tiny_reply = false;
-                        break;
-                    }
-
-                    case LASSO_HOST_GET_DATACELL_VALUE : {
-
-                    #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-                        msg_err = PackReaderGetUnsignedInteger(&frame_reader, &lparam);
-                        cparam = (uint8_t)lparam;
-                    #else
-                        msg_err = lasso_hostGetDatacellNumber(&receiverBuffer, &cparam);
-                    #endif
-                        if (msg_err) break;
-                        dC = lasso_hostSeekDatacell(cparam, &lparam);
-
-                        if (dC) {
-                    #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-                            PackWriterOpen(&frame_writer, E_PackTypeArray, 1);
-                            switch (dC->type & LASSO_DATACELL_TYPE_BYTEWIDTH_MASK)
-                            {
-                                case LASSO_BOOL:   { PackWriterPutBoolean(&frame_writer, *(bool*)(dC->ptr)); break; }
-                                case LASSO_CHAR:   {
-                                    if (dC->count == 1) {
-                                        PackWriterPutRawBytes(&frame_writer, (uint8_t*)(dC->ptr), 1);
-                                    }
-                                    else {
-                                        PackWriterPutString(&frame_writer, (const char*)(dC->ptr));
-                                    }
-                                    break;
+                    if (dC) {
+                #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
+                        PackWriterOpen(&frame_writer, E_PackTypeArray, 1);
+                        switch (dC->type & LASSO_DATACELL_TYPE_BYTEWIDTH_MASK)
+                        {
+                            case LASSO_BOOL:   { PackWriterPutBoolean(&frame_writer, *(bool*)(dC->ptr)); break; }
+                            case LASSO_CHAR:   {
+                                if (dC->count == 1) {
+                                    PackWriterPutRawBytes(&frame_writer, (uint8_t*)(dC->ptr), 1);
                                 }
-                                case LASSO_UINT8:  { PackWriterPutUnsignedInteger(&frame_writer, *(uint8_t*)(dC->ptr)); break; }
-                                case LASSO_INT8:   { PackWriterPutSignedInteger(&frame_writer, *(int8_t*)(dC->ptr)); break; }
-                                case LASSO_UINT16: { PackWriterPutUnsignedInteger(&frame_writer, *(uint16_t*)(dC->ptr)); break; }
-                                case LASSO_INT16:  { PackWriterPutSignedInteger(&frame_writer, *(int16_t*)(dC->ptr)); break; }
-                                case LASSO_UINT32: { PackWriterPutUnsignedInteger(&frame_writer, *(uint32_t*)(dC->ptr)); break; }
-                                case LASSO_INT32:  { PackWriterPutSignedInteger(&frame_writer, *(int32_t*)(dC->ptr)); break; }
-                                case LASSO_FLOAT:  { PackWriterPutFloat(&frame_writer, *(float*)(dC->ptr)); break; }
-                                case LASSO_DOUBLE: { PackWriterPutFloat(&frame_writer, *(double*)(dC->ptr)); break; }
-                                default: { msg_err = ENOTSUP; }
-                            }
-                            if (msg_err) break;
-                    #else
-                            if (lasso_copyDatacellValue(dC, &responseBuffer) != 0) {
-                                msg_err = EINVAL;
+                                else {
+                                    PackWriterPutString(&frame_writer, (const char*)(dC->ptr));
+                                }
                                 break;
                             }
-                    #endif
+                            case LASSO_UINT8:  { PackWriterPutUnsignedInteger(&frame_writer, *(uint8_t*)(dC->ptr)); break; }
+                            case LASSO_INT8:   { PackWriterPutSignedInteger(&frame_writer, *(int8_t*)(dC->ptr)); break; }
+                            case LASSO_UINT16: { PackWriterPutUnsignedInteger(&frame_writer, *(uint16_t*)(dC->ptr)); break; }
+                            case LASSO_INT16:  { PackWriterPutSignedInteger(&frame_writer, *(int16_t*)(dC->ptr)); break; }
+                            case LASSO_UINT32: { PackWriterPutUnsignedInteger(&frame_writer, *(uint32_t*)(dC->ptr)); break; }
+                            case LASSO_INT32:  { PackWriterPutSignedInteger(&frame_writer, *(int32_t*)(dC->ptr)); break; }
+                            case LASSO_FLOAT:  { PackWriterPutFloat(&frame_writer, *(float*)(dC->ptr)); break; }
+                            case LASSO_DOUBLE: { PackWriterPutFloat(&frame_writer, *(double*)(dC->ptr)); break; }
+                            default: { msg_err = ENOTSUP; }
                         }
-                        else {
-                            msg_err = EFAULT;
-                            break;
-                        }
-
-                        tiny_reply = false;
-                        break;
-                    }
-
-                    //----------------------------//
-                    // LASSO_HOST_SET_x functions //
-                    //----------------------------//
-
-                    case LASSO_HOST_SET_ADVERTISE : {
-                        // strobing on : this command does not send any reply, effect can easily be seen on client side
-                        // strobing off: same
-                        lasso_advertise = true;
-
-                        if (lasso_strobing) {
-                            lasso_strobing = false;
-
-                            if (actCallback) {
-                                actCallback(false);
-                            }
-                        }
-
-                        // since advertising and strobing is mutually exclusive, strobing is off now
-                        return;
-                    }
-
-                    case LASSO_HOST_SET_STROBE_PERIOD : {
-                        // advertising on: no reply is sent
-                        // strobing on : tiny reply sent only for encodings COBS or ESCS
-                        // strobing off: tiny reply sent (acknowledgement)
-                        // Note: effect of this command can easily be observed on client side
-
-                        // read in period from command's parameter list
-                    #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-                        msg_err = PackReaderGetUnsignedInteger(&frame_reader, &lparam);
-                        sparam = (uint16_t)lparam;
-                    #else
-                        msg_err = lasso_hostGetStrobePeriod(&receiverBuffer, &sparam);
-                    #endif
                         if (msg_err) break;
-
-                        // try to set new strobe period
-                        if ((sparam >= LASSO_HOST_STROBE_PERIOD_MIN_TICKS) && (sparam <= LASSO_HOST_STROBE_PERIOD_MAX_TICKS)) {
-                            //strobe_enable = true; // strobing not explicitly enabled here
-                            if (perCallback) {
-                                lasso_strobe_period = perCallback(sparam);
-                            }
-                            else {
-                                lasso_strobe_period = sparam;
-                            }
-                            if (strobe.countdown > lasso_strobe_period) {
-                                strobe.countdown = lasso_strobe_period;
-                            }
-                        }
-                        else {
+                #else
+                        if (lasso_copyDatacellValue(dC, &responseBuffer) != 0) {
                             msg_err = EINVAL;
                             break;
                         }
-
-                        if (lasso_advertise) {
-                            return;
-                        }
-
-                    #if (LASSO_HOST_STROBE_ENCODING < LASSO_ENCODING_COBS)  // no response & strobe interleaving possible
-                        if (lasso_strobing) {
-                            return;
-                        }
-                    #endif
-
+                #endif
+                    }
+                    else {
+                        msg_err = EFAULT;
                         break;
                     }
 
-                    case LASSO_HOST_SET_DATASPACE_STROBE : {
-                        // advertising on: no reply is sent
-                        // strobing on: tiny reply sent only for encodings COBS or ESCS
-                        // strobing off: tiny reply sent (acknowledgement)
-                        // Note: effect of this command can easily be observed on client side
+                    tiny_reply = false;
+                    break;
+                }
 
-                        // get flag from command's parameter list
-                    #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-                        msg_err = PackReaderGetUnsignedInteger(&frame_reader, &lparam);
-                    #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
-                        if (sscanf((const char*)receiverBuffer, "%lu", (unsigned long*)&lparam) != 1) {
-                            msg_err = EINVAL;
-                        }
-                    #else
-                        lparam = *(uint32_t*)receiverBuffer;
-                    #endif
-                        if (msg_err) break;
+                //----------------------------//
+                // LASSO_HOST_SET_x functions //
+                //----------------------------//
 
-                        // switch strobing on/off
-                        if (lparam) {
-                            if (!lasso_strobing) {
-                                strobe.countdown = 1;   // start strobing immediately
-                            }
-                            lasso_strobing = true;
-                        }
-                        else {
-                            lasso_strobing  = false;    // stop strobing on next cycle
-                        }
+                case LASSO_HOST_SET_ADVERTISE : {
+                    // strobing on : this command does not send any reply, effect can easily be seen on client side
+                    // strobing off: same
+                    lasso_advertise = true;
+
+                    if (lasso_strobing) {
+                        lasso_strobing = false;
 
                         if (actCallback) {
-                            actCallback(lasso_strobing);
+                            actCallback(false);
                         }
+                    }
 
-                        // also stop advertising, if necessary
-                        if (lasso_advertise) {
-                            strobe.Byte_count = 0;      // cancel remaining frames
-                            lasso_advertise = false;
-                            return;                     // no response sent
+                    // since advertising and strobing is mutually exclusive, strobing is off now
+                    return;
+                }
+
+                case LASSO_HOST_SET_STROBE_PERIOD : {
+                    // advertising on: no reply is sent
+                    // strobing on : tiny reply sent only for encodings COBS or ESCS
+                    // strobing off: tiny reply sent (acknowledgement)
+                    // Note: effect of this command can easily be observed on client side
+
+                    // read in period from command's parameter list
+                #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
+                    msg_err = PackReaderGetUnsignedInteger(&frame_reader, &lparam);
+                    sparam = (uint16_t)lparam;
+                #else
+                    msg_err = lasso_hostGetStrobePeriod(&receiverBuffer, &sparam);
+                #endif
+                    if (msg_err) break;
+
+                    // try to set new strobe period
+                    if ((sparam >= LASSO_HOST_STROBE_PERIOD_MIN_TICKS) && (sparam <= LASSO_HOST_STROBE_PERIOD_MAX_TICKS)) {
+                        //strobe_enable = true; // strobing not explicitly enabled here
+                        if (perCallback) {
+                            lasso_strobe_period = perCallback(sparam);
                         }
+                        else {
+                            lasso_strobe_period = sparam;
+                        }
+                        if (strobe.countdown > lasso_strobe_period) {
+                            strobe.countdown = lasso_strobe_period;
+                        }
+                    }
+                    else {
+                        msg_err = EINVAL;
+                        break;
+                    }
 
-                    #if (LASSO_HOST_STROBE_ENCODING < LASSO_ENCODING_COBS)  // no response & strobe interleaving possible
+                    if (lasso_advertise) {
                         return;
-                    #else
-                        break;
-                    #endif
                     }
 
-                    case LASSO_HOST_SET_DATACELL_STROBE : {
-                        // advertising on: no reply is sent
-                        // strobing on : not possible -> this command requires strobing to be off since it changes the strobe length
-                        // strobing off: acknowledgement is sent (tiny reply)
-                        if (lasso_strobing) {
-                            return;
+                #if (LASSO_HOST_STROBE_ENCODING < LASSO_ENCODING_COBS)  // no response & strobe interleaving possible
+                    if (lasso_strobing) {
+                        return;
+                    }
+                #endif
+
+                    break;
+                }
+
+                case LASSO_HOST_SET_DATASPACE_STROBE : {
+                    // advertising on: no reply is sent
+                    // strobing on: tiny reply sent only for encodings COBS or ESCS
+                    // strobing off: tiny reply sent (acknowledgement)
+                    // Note: effect of this command can easily be observed on client side
+
+                    // get flag from command's parameter list
+                #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
+                    msg_err = PackReaderGetUnsignedInteger(&frame_reader, &lparam);
+                #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
+                    if (sscanf((const char*)receiverBuffer, "%lu", (unsigned long*)&lparam) != 1) {
+                        msg_err = EINVAL;
+                    }
+                #else
+                    lparam = *(uint32_t*)receiverBuffer;
+                #endif
+                    if (msg_err) break;
+
+                    // switch strobing on/off
+                    if (lparam) {
+                        if (!lasso_strobing) {
+                            strobe.countdown = 1;   // start strobing immediately
                         }
+                        lasso_strobing = true;
+                    }
+                    else {
+                        lasso_strobing  = false;    // stop strobing on next cycle
+                    }
 
-                    #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-                        msg_err = PackReaderGetUnsignedInteger(&frame_reader, &lparam);
-                        cparam = (uint8_t)lparam;
-                    #else
-                        msg_err = lasso_hostGetDatacellNumber(&receiverBuffer, &cparam);
-                    #endif
+                    if (actCallback) {
+                        actCallback(lasso_strobing);
+                    }
+
+                    // also stop advertising, if necessary
+                    if (lasso_advertise) {
+                        strobe.Byte_count = 0;      // cancel remaining frames
+                        lasso_advertise = false;
+                        return;                     // no response sent
+                    }
+
+                #if (LASSO_HOST_STROBE_ENCODING < LASSO_ENCODING_COBS)  // no response & strobe interleaving possible
+                    return;
+                #else
+                    break;
+                #endif
+                }
+
+                case LASSO_HOST_SET_DATACELL_STROBE : {
+                    // advertising on: no reply is sent
+                    // strobing on : not possible -> this command requires strobing to be off since it changes the strobe length
+                    // strobing off: acknowledgement is sent (tiny reply)
+                    if (lasso_strobing) {
+                        return;
+                    }
+
+                #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
+                    msg_err = PackReaderGetUnsignedInteger(&frame_reader, &lparam);
+                    cparam = (uint8_t)lparam;
+                #else
+                    msg_err = lasso_hostGetDatacellNumber(&receiverBuffer, &cparam);
+                #endif
+                    if (msg_err) break;
+                    dC = lasso_hostSeekDatacell(cparam, &lparam);
+
+                    if (dC) {
+                #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
+                        msg_err = PackReaderGetBoolean(&frame_reader, &bparam);
+                #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
+                        if (sscanf((char*)receiverBuffer, "%lu", (unsigned long*)&lparam) != 1) {
+                            msg_err = EINVAL;
+                        }
+                        bparam = lparam != 0;
+                #else
+                        bparam = *receiverBuffer;
+                #endif
                         if (msg_err) break;
-                        dC = lasso_hostSeekDatacell(cparam, &lparam);
 
-                        if (dC) {
-                    #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-                            msg_err = PackReaderGetBoolean(&frame_reader, &bparam);
-                    #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
-                            if (sscanf((char*)receiverBuffer, "%lu", (unsigned long*)&lparam) != 1) {
-                                msg_err = EINVAL;
-                            }
-                            bparam = lparam != 0;
-                    #else
-                            bparam = *receiverBuffer;
-                    #endif
-                            if (msg_err) break;
-
-                            lparam = dC->type & LASSO_DATACELL_ENABLE_MASK;
-                            if (bparam) {
-                                if (!lparam) {
-                                    lparam = (uint32_t)(dC->type & LASSO_DATACELL_BYTEWIDTH_MASK);
-                                    if (lparam == 0) {
-                                        lparam = 1;
-                                    }
-                                    strobe.Bytes_total += (uint32_t)dC->count * lparam;
-                                    dC->type |= LASSO_DATACELL_ENABLE_MASK;
+                        lparam = dC->type & LASSO_DATACELL_ENABLE_MASK;
+                        if (bparam) {
+                            if (!lparam) {
+                                lparam = (uint32_t)(dC->type & LASSO_DATACELL_BYTEWIDTH_MASK);
+                                if (lparam == 0) {
+                                    lparam = 1;
                                 }
-                            }
-                            else {
-                                if (lparam) {
-                                    lparam = (uint32_t)(dC->type & LASSO_DATACELL_BYTEWIDTH_MASK);
-                                    if (lparam == 0) {
-                                        lparam = 1;
-                                    }
-                                    strobe.Bytes_total -= (uint32_t)dC->count * lparam;
-                                    dC->type &= LASSO_DATACELL_DISABLE_MASK;
-                                }
+                                strobe.Bytes_total += (uint32_t)dC->count * lparam;
+                                dC->type |= LASSO_DATACELL_ENABLE_MASK;
                             }
                         }
                         else {
-                            msg_err = EFAULT;
-                            break;
+                            if (lparam) {
+                                lparam = (uint32_t)(dC->type & LASSO_DATACELL_BYTEWIDTH_MASK);
+                                if (lparam == 0) {
+                                    lparam = 1;
+                                }
+                                strobe.Bytes_total -= (uint32_t)dC->count * lparam;
+                                dC->type &= LASSO_DATACELL_DISABLE_MASK;
+                            }
                         }
-
-                        if (lasso_advertise) {
-                            return;
-                        }
-
+                    }
+                    else {
+                        msg_err = EFAULT;
                         break;
                     }
 
-                    case LASSO_HOST_SET_DATACELL_VALUE : {
-                        // advertising on: no reply is sent
-                        // strobing on : tiny reply sent only for encodings COBS and ESCS
-                        // strobing off: tiny reply sent (acknowledgement)
+                    if (lasso_advertise) {
+                        return;
+                    }
 
-                    #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-                        msg_err = PackReaderGetUnsignedInteger(&frame_reader, &lparam);
-                        cparam = (uint8_t)lparam;
-                    #else
-                        msg_err = lasso_hostGetDatacellNumber(&receiverBuffer, &cparam);
-                    #endif
-                        if (msg_err) break;
-                        dC = lasso_hostSeekDatacell(cparam, &lparam);
+                    break;
+                }
 
-                        if (dC) {
-                            if (dC->type & LASSO_DATACELL_WRITEABLE) {
-                            #if (LASSO_HOST_STROBE_EXTERNAL_SOURCE != 0)
-                                // temporarily use receiverBuffer for storage of interpreted value
-                                // in fact, incoming values are not passed on into external source space ...
-                                // ... they can only be used for control purposes in the onChange callback
-                                dC->ptr = (void*)receiverBuffer;
-                            #endif
+                case LASSO_HOST_SET_DATACELL_VALUE : {
+                    // advertising on: no reply is sent
+                    // strobing on : tiny reply sent only for encodings COBS and ESCS
+                    // strobing off: tiny reply sent (acknowledgement)
 
-                            #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-                                msg_err = lasso_hostSetDatacellValue((void*)&frame_reader, dC);
-                            #else
-                                msg_err = lasso_hostSetDatacellValue(receiverBuffer, dC);
-                            #endif
-                            }
-                            else {
-                                msg_err = EACCES;
-                            }
+                #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
+                    msg_err = PackReaderGetUnsignedInteger(&frame_reader, &lparam);
+                    cparam = (uint8_t)lparam;
+                #else
+                    msg_err = lasso_hostGetDatacellNumber(&receiverBuffer, &cparam);
+                #endif
+                    if (msg_err) break;
+                    dC = lasso_hostSeekDatacell(cparam, &lparam);
+
+                    if (dC) {
+                        if (dC->type & LASSO_DATACELL_WRITEABLE) {
+                        #if (LASSO_HOST_STROBE_EXTERNAL_SOURCE != 0)
+                            // temporarily use receiverBuffer for storage of interpreted value
+                            // in fact, incoming values are not passed on into external source space ...
+                            // ... they can only be used for control purposes in the onChange callback
+                            dC->ptr = (void*)receiverBuffer;
+                        #endif
+
+                        #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
+                            msg_err = lasso_hostSetDatacellValue((void*)&frame_reader, dC);
+                        #else
+                            msg_err = lasso_hostSetDatacellValue(receiverBuffer, dC);
+                        #endif
                         }
                         else {
-                            msg_err = EFAULT;
+                            msg_err = EACCES;
                         }
-
-                        if (lasso_advertise) {
-                            return;
-                        }
-
-                    #if (LASSO_HOST_STROBE_ENCODING < LASSO_ENCODING_COBS)  // no response & strobe interleaving possible
-                        if (lasso_strobing) {
-                            return;
-                        }
-                    #endif
-
-                        break;
+                    }
+                    else {
+                        msg_err = EFAULT;
                     }
 
-                    default : {
-                        msg_err = EOPNOTSUPP;
+                    if (lasso_advertise) {
+                        return;
                     }
+
+                #if (LASSO_HOST_STROBE_ENCODING < LASSO_ENCODING_COBS)  // no response & strobe interleaving possible
+                    if (lasso_strobing) {
+                        return;
+                    }
+                #endif
+
+                    break;
+                }
+
+                default : {
+                    msg_err = EOPNOTSUPP;
                 }
             }
-
-        #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-            if (tiny_reply) {
-                PackWriterOpen(&frame_writer, E_PackTypeArray, 0);
-                PackWriterPutSignedInteger(&frame_writer, msg_err);
-            }
-            else {
-                PackWriterPutSignedInteger(&frame_writer, msg_err);
-            }
-
-            response.Bytes_total = PackWriterGetOffset(&frame_writer);
-        #else
-            if (tiny_reply) {
-                // tiny reply can be the consequence of an error
-                // -> return to offset right behind opcode
-                responseBuffer = response.buffer;
-                responseBuffer++;
-
-            // correct responseBuffer pointer for COBS
-            #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
-                responseBuffer += 2;   // access space behind COBS header
-            #endif
-
-            // correct responseBuffer pointer for ESCS
-            #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
-                responseBuffer += response.Bytes_max;   // access 2nd half of buffer
-            #endif
-            }
-
-            // print error code (0 for no error)
-            #if (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
-                msg_err = sprintf((char*)responseBuffer, "%li", (signed long)msg_err);
-                responseBuffer += msg_err;
-            #else
-                *responseBuffer++ = (uint8_t)msg_err;
-            #endif
-
-            // compute transmission length (to be corrected further down for COBS and ESCS)
-            response.Bytes_total = responseBuffer - response.buffer;
-        #endif
-
-    #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_RN)
-            *responseBuffer++ = 0x0D;   // '\r'
-            *responseBuffer   = 0x0A;   // '\n'
-            response.Bytes_total += 2;
-
-            // no CRC generation allowed
-    #else
-        #if (LASSO_HOST_PROCESSING_MODE != LASSO_MSGPACK_MODE)
-        // correct transmission length for COBS
-        #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
-            response.Bytes_total -= 2;  // COBS header does not count as payload Bytes
-        #endif
-
-        // correct transmission length for ESCS
-        #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
-            response.Bytes_total -= response.Bytes_max;   // correct initial offset
-        #endif
-        #endif
-
-        #if (LASSO_HOST_COMMAND_CRC_ENABLE == 1)
-            lasso_hostAppendCRC(crcBuffer, response.Bytes_total);
-            response.Bytes_total += LASSO_HOST_CRC_BYTEWIDTH;
-        #endif
-
-    #endif
         }
     }
+            
+#if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
+    if (tiny_reply) {
+        PackWriterOpen(&frame_writer, E_PackTypeArray, 0);
+        PackWriterPutSignedInteger(&frame_writer, msg_err);
+    }
+    else {
+        PackWriterPutSignedInteger(&frame_writer, msg_err);
+    }
+
+    response.Bytes_total = PackWriterGetOffset(&frame_writer);
+#else
+    if (tiny_reply) {
+        // tiny reply can be the consequence of an error
+        // -> return to offset right behind opcode
+        responseBuffer = response.buffer;
+        responseBuffer++;
+
+    // correct responseBuffer pointer for COBS
+    #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
+        responseBuffer += 2;   // access space behind COBS header
+    #endif
+
+    // correct responseBuffer pointer for ESCS
+    #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
+        responseBuffer += response.Bytes_max;   // access 2nd half of buffer
+    #endif
+    }
+
+    // print error code (0 for no error)
+    #if (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
+        msg_err = sprintf((char*)responseBuffer, "%li", (signed long)msg_err);
+        responseBuffer += msg_err;
+    #else
+        *responseBuffer++ = (uint8_t)msg_err;
+    #endif
+
+    // compute transmission length (to be corrected further down for COBS and ESCS)
+    response.Bytes_total = responseBuffer - response.buffer;
+#endif
+
+#if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_RN)
+    *responseBuffer++ = 0x0D;   // '\r'
+    *responseBuffer   = 0x0A;   // '\n'
+    response.Bytes_total += 2;
+
+    // no CRC generation allowed
+#else
+    
+#if (LASSO_HOST_PROCESSING_MODE != LASSO_MSGPACK_MODE)
+    
+// correct transmission length for COBS
+#if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
+    response.Bytes_total -= 2;  // COBS header does not count as payload Bytes
+#endif
+
+// correct transmission length for ESCS
+#if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
+    response.Bytes_total -= response.Bytes_max;   // correct initial offset
+#endif
+
+#endif
+
+#if (LASSO_HOST_COMMAND_CRC_ENABLE == 1)
+    lasso_hostAppendCRC(crcBuffer, response.Bytes_total);
+    response.Bytes_total += LASSO_HOST_CRC_BYTEWIDTH;
+#endif
+
+#endif
 }
 
 
@@ -2369,8 +2398,8 @@ int32_t lasso_hostRegisterMEM (void) {
 int32_t lasso_hostReceiveByte (
     uint8_t b                   //!< char from serial port
 ) {
-    if (receiveBufferIndex < LASSO_HOST_COMMAND_BUFFER_SIZE) {
 #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_RN)
+    if (receiveBufferIndex < LASSO_HOST_COMMAND_BUFFER_SIZE) {    
         if (b == '\n') {
             if (receiveBufferIndex == 0) {
                 return ENODATA;
@@ -2404,24 +2433,44 @@ int32_t lasso_hostReceiveByte (
             receiveBufferIndex = 0;
             return ENOSPC;
         }
-#elif (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
-        if (response.valid == 0) {
-            response.valid = COBS_decode_inline(b, receiveBuffer, LASSO_HOST_COMMAND_BUFFER_SIZE);
-        }
-        else {
-            return ENOSPC;
-        }
-#else // ESCS
-        if (response.valid == 0) {
-            response.valid = ESCS_decode_inline(b, receiveBuffer, LASSO_HOST_COMMAND_BUFFER_SIZE);
-        }
-        else {
-            return ENOSPC;
-        }
-#endif
     }
     else {
+    
+#elif (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
+    if (response.valid == 0) {
+        response.valid = COBS_decode_inline(b, receiveBuffer, LASSO_HOST_COMMAND_BUFFER_SIZE);                
+    }
+    else {
+        return ENOSPC;
+    }
+    
+    if (response.valid > LASSO_HOST_COMMAND_BUFFER_SIZE) {
+        
+#else // ESCS
+    if (response.valid == 0) {
+        response.valid = ESCS_decode_inline(b, receiveBuffer, LASSO_HOST_COMMAND_BUFFER_SIZE);
+    }
+    else {
+        return ENOSPC;
+    }
+    
+    if (response.valid > LASSO_HOST_COMMAND_BUFFER_SIZE) {
+        
+#endif
+
+        // receive buffer overflow
         receiveBufferIndex = 0;
+        
+        lasso_hostInterpreteCommand(EOVERFLOW);
+
+        response.frame = response.buffer;   // load buffer start
+        response.Byte_count = response.Bytes_total;
+
+    #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
+        response.COBS_backup = response.buffer[2];
+    #endif        
+            
+        response.valid = 0;    
         return EOVERFLOW;
     }
 
@@ -2563,7 +2612,7 @@ void lasso_hostHandleCOM (void)
                         }
                     }
                     else {
-                        lasso_hostInterpreteCommand();
+                        lasso_hostInterpreteCommand(0);
 
                         response.frame = response.buffer;   // load buffer start
                         response.Byte_count = response.Bytes_total;

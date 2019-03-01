@@ -25,47 +25,51 @@
 #include <errno.h>
 
 #ifndef EIO
-    #define EIO 5
+    #define EIO 5           /* I/O error */
 #endif
 
 #ifndef EACCES
-    #define EACCES 13
+    #define EACCES 13       /* Permission denied */
 #endif
 
 #ifndef EFAULT
-    #define EFAULT 14
+    #define EFAULT 14       /* Bad address */
 #endif
 
 #ifndef EBUSY
-    #define EBUSY 16
+    #define EBUSY 16        /* Mount device busy */
 #endif
 
 #ifndef EINVAL
-    #define EINVAL 22
+    #define EINVAL 22       /* Invalid argument */
+#endif
+
+#ifndef ENOMSG
+    #define ENOMSG 35       /* No message of desired type */
 #endif
 
 #ifndef ENODATA
-    #define ENODATA 61
+    #define ENODATA 61      /* No data */
 #endif
 
 #ifndef EOPNOTSUPP
-    #define EOPNOTSUPP 95
+    #define EOPNOTSUPP 95   /* Operation not supported */
 #endif
 
 #ifndef ENOTSUP
-    #define ENOTSUP 134
+    #define ENOTSUP 134     /* Not supported */
 #endif
 
 #ifndef EILSEQ
-    #define EILSEQ 138
+    #define EILSEQ 138      /* Illegal sequence */
 #endif
 
 #ifndef EOVERFLOW
-    #define EOVERFLOW 139
+    #define EOVERFLOW 139   /* Value too large for defined data type */
 #endif
 
 #ifndef ECANCELED
-    #define ECANCELED 140
+    #define ECANCELED 140   /* Operation canceled */
 #endif
 
 #endif /* LASSO_ERRNO_H */

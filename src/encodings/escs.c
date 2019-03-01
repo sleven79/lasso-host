@@ -76,12 +76,14 @@ static volatile struct {
  *
  *          Payloads longer than destination buffer size are trashed.
  *
- *  \return Size (<=254) of message once fully received, 0 otherwise
+ *  \return sizeof(message) once fully received (<=254), 
+ *          sizeof(destination buffer) + 1 if buffer overrun,
+ *          0 otherwise
  */
 uint8_t ESCS_decode_inline (
     uint8_t c,                //!< received Byte
     uint8_t* dest,            //!< destination buffer
-    uint8_t size              //!< size of destination buffer
+    uint8_t size              //!< size of destination buffer (1...254)
 ) {
     if (c == ESCS_DEL) {            // check for delimiter
         ESCS_ctrl.state = 255;      // expect message payload now
@@ -112,6 +114,7 @@ uint8_t ESCS_decode_inline (
         }
         else {
             ESCS_ctrl.state = 0;        // otherwise trash message
+            return size + 1;            // return invalid size
         }
     }
 

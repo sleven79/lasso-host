@@ -88,12 +88,14 @@ static volatile struct {
  *
  *          Payloads longer than destination buffer size are trashed.
  *
- *  \return Size (<=253) of message once fully received, 0 otherwise
+ *  \return sizeof(message) once fully received (<=253), 
+ *          sizeof(destination buffer) + 1 if buffer overrun,
+ *          0 otherwise
  */
 uint8_t COBS_decode_inline (
-    uint8_t c,                //!< received Byte
-    uint8_t* dest,            //!< destination buffer
-    uint8_t size              //!< size of destination buffer
+    uint8_t c,      //!< received Byte
+    uint8_t* dest,  //!< destination buffer
+    uint8_t size    //!< size of destination buffer (1...253)
 ) {
     if (c == COBS_DEL) {            // check for delimiter
         c = COBS_ctrl.code;
@@ -136,6 +138,7 @@ uint8_t COBS_decode_inline (
     }
     else {
         COBS_ctrl.code = 255;       // otherwise trash message
+        return size + 1;            // return invalid size
     }
 
     return 0;
