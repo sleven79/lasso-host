@@ -1690,7 +1690,10 @@ static void lasso_hostInterpreteCommand (
                     if ((sparam >= LASSO_HOST_STROBE_PERIOD_MIN_TICKS) && (sparam <= LASSO_HOST_STROBE_PERIOD_MAX_TICKS)) {
                         //strobe_enable = true; // strobing not explicitly enabled here
                         if (perCallback) {
-                            lasso_strobe_period = perCallback(sparam);
+                            sparam = perCallback(sparam);
+                            if ((sparam >= LASSO_HOST_STROBE_PERIOD_MIN_TICKS) && (sparam <= LASSO_HOST_STROBE_PERIOD_MAX_TICKS)) {
+                                lasso_strobe_period = sparam;
+                            }
                         }
                         else {
                             lasso_strobe_period = sparam;
