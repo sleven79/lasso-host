@@ -2089,6 +2089,17 @@ static int32_t lasso_hostRegisterTimestamp (void) {
 #endif
 
 
+/*!
+ *  \brief  Clear receive timeout and buffer index.
+ *
+ *  \return Void
+ */
+void lasso_clearReceiveTimeout(void) {
+    receiveBufferIndex = 0;
+    receiveTimeout = 0;
+}
+
+
 //----------------------//
 // Public functions API //
 //----------------------//
@@ -2418,17 +2429,6 @@ int32_t lasso_hostRegisterMEM (void) {
     #endif
 
     return 0;
-}
-
-
-/*!
- *  \brief  Clear receive timeout and buffer index.
- *
- *  \return Void
- */
-void lasso_clearReceiveTimeout(void) {
-    receiveBufferIndex = 0;    
-    receiveTimeout = 0;
 }
 
 
