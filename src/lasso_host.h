@@ -181,9 +181,18 @@ typedef bool(*lasso_chgCallback)(void* const);
 typedef uint16_t(*lasso_perCallback)(uint16_t);
 
 /*!
+ *  \brief  Callback for user command received.
+ *
+ *  \param[in]  pointer to command Byte array (format must be known by user)
+ *  \param[in]  length of command Byte array
+ *  \return     0 (no error) or any other error code
+ */
+typedef int32_t(*lasso_cmdCallback)(uint8_t* cmd, uint8_t len);
+
+/*!
  *  \brief  Callback for user control input.
  *
- *  \param[in]  pointer to ctrls array (format must be known by user)
+ *  \param[in]  pointer to ctrls Byte array (format must be known by user)
  *  \return     Void
  */
 typedef void(*lasso_ctlCallback)(uint8_t* ctrls);
@@ -215,7 +224,16 @@ int32_t lasso_hostRegisterCOM (
 );
 
 /*!
- *  \brief  Register user-supplied CTRLS function.
+ *  \brief  Register user-supplied callback for command received callback event.
+ *
+ *  \return Error code
+ */
+int32_t lasso_hostRegisterCMDRX (
+    lasso_cmdCallback cC            //!< user-supplied CMDRX function
+);
+
+/*!
+ *  \brief  Register user-supplied callback for controls received event.
  *
  *  \return Error code
  */
