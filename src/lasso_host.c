@@ -2421,12 +2421,16 @@ int32_t lasso_hostRegisterMEM (void) {
 }
 
 
+/*!
+ *  \brief  Clear receive timeout and buffer index.
+ *
+ *  \return Void
+ */
 void lasso_clearReceiveTimeout(void) {
     receiveBufferIndex = 0;    
     receiveTimeout = 0;
 }
 
-bool check = false;
 
 /*!
  *  \brief  Receive one char from user-supplied serial port.
@@ -2438,9 +2442,6 @@ int32_t lasso_hostReceiveByte (
 ) {
 #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_RN)
     if (receiveBufferIndex < LASSO_HOST_COMMAND_BUFFER_SIZE) {    
-        
-        if (receiveBufferIndex == 0) check = (b == 0x53);
-        
         if (b == '\n') {
             if (receiveBufferIndex == 0) {
                 return ENODATA;
