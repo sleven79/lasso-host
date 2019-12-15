@@ -390,6 +390,7 @@ static lasso_comCallback comCallback = NULL;    //!< trigger communication
 static lasso_actCallback actCallback = NULL;    //!< strobe de-/activation
 static lasso_perCallback perCallback = NULL;    //!< strobe period changed
 static lasso_ctlCallback ctlCallback = NULL;    //!< controls changed
+static lasso_cmdCallback cmdCallback = NULL;    //!< command received
 
 static dataFrame strobe = \
     { LASSO_HOST_STROBE_PERIOD_TICKS, 0, true , NULL, NULL, 0, 0, 0};
@@ -1329,7 +1330,7 @@ static int32_t lasso_hostGetCycleMargin (void) {
  *  \return Void
  */
 static void lasso_hostInterpreteCommand (
-    int32_t rx_err             //!< receive buffer overflow? incomplete command?
+    int32_t rx_err              //!< receive buffer overflow? incomplete command?
 ) {
     int32_t  msg_err = 0;       // error during message processing
     
@@ -1359,6 +1360,10 @@ static void lasso_hostInterpreteCommand (
     receiverBuffer[response.valid] = 0;         // and terminate correctly
 #endif
 
+    if (cmdCallback) {
+        msg_err = cmdCallback(receiveBuffer, response.valid);
+    }
+
     response.Bytes_total = 0;
 
 #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
@@ -1379,29 +1384,31 @@ static void lasso_hostInterpreteCommand (
 
     // handle message
 #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-    // setup msgpack reader on "receiveBuffer" with max length "response.valid"
-    PackReaderSetBuffer(&frame_reader, receiveBuffer, response.valid);
-    PackReaderOpen(&frame_reader, E_PackTypeArray, &nargs);
+    if (msg_err == 0) {
+        // setup msgpack reader on "receiveBuffer" with max length "response.valid"
+        PackReaderSetBuffer(&frame_reader, receiveBuffer, response.valid);
+        PackReaderOpen(&frame_reader, E_PackTypeArray, &nargs);
 
-    if (nargs > 0) {    // receive at least expected opcode
-        msg_err = PackReaderGetUnsignedInteger(&frame_reader, &opcode);
-    else {
-        opcode = LASSO_HOST_INVALID_OPCODE;
-        msg_err = ENOMSG;
+        if (nargs > 0) {    // receive at least expected opcode
+            msg_err = PackReaderGetUnsignedInteger(&frame_reader, &opcode);
+        else {
+            opcode = LASSO_HOST_INVALID_OPCODE;
+            msg_err = ENOMSG;
+        }
+        
+        if (nargs != 2) { // expect 1) opcode and 2) array of params
+            msg_err = ENOMSG;   
+        }
+        
+        if (rx_err != 0) {  // receive buffer overflow? incomplete command?
+            msg_err = rx_err;
+        }
+        
+        // prepare response frame
+        PackWriterSetBuffer(&frame_writer, responseBuffer, LASSO_HOST_RESPONSE_BUFFER_SIZE);
+        PackWriterOpen(&frame_writer, E_PackTypeArray, 3);
+        PackWriterPutUnsignedInteger(&frame_writer, opcode);    // send opcode back          
     }
-    
-    if (nargs != 2) { // expect 1) opcode and 2) array of params
-        msg_err = ENOMSG;   
-    }
-    
-    if (rx_err != 0) {  // receive buffer overflow? incomplete command?
-        msg_err = rx_err;
-    }
-    
-    // prepare response frame
-    PackWriterSetBuffer(&frame_writer, responseBuffer, LASSO_HOST_RESPONSE_BUFFER_SIZE);
-    PackWriterOpen(&frame_writer, E_PackTypeArray, 3);
-    PackWriterPutUnsignedInteger(&frame_writer, opcode);    // send opcode back          
         
     if (msg_err == 0) { // if ok so far, start reading parameter array
         msg_err = PackReaderOpen(&frame_reader, E_PackTypeArray, &nargs);
@@ -1409,23 +1416,25 @@ static void lasso_hostInterpreteCommand (
         if (msg_err == 0) {
             
 #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
-    msg_err = sscanf((const char*)receiverBuffer++, "%c", &opcode);
-    if (msg_err == 1) { // received the expected opcode
-        msg_err = sprintf((char*)responseBuffer++, "%c", opcode);        
-        
-        if (msg_err == 1) {
-            msg_err = 0;
+    if (msg_err == 0) {
+        msg_err = sscanf((const char*)receiverBuffer++, "%c", &opcode);
+        if (msg_err == 1) { // received the expected opcode
+            msg_err = sprintf((char*)responseBuffer++, "%c", opcode);        
+            
+            if (msg_err == 1) {
+                msg_err = 0;
+            }
+        }
+        else {
+            opcode = LASSO_HOST_INVALID_OPCODE;
+            msg_err = ENOMSG;
+        }
+
+        if (rx_err != 0) {  // receive buffer overflow? incomplete command?
+            msg_err = rx_err;
         }
     }
-    else {
-        opcode = LASSO_HOST_INVALID_OPCODE;
-        msg_err = ENOMSG;
-    }
     
-    if (rx_err != 0) {  // receive buffer overflow? incomplete command?
-        msg_err = rx_err;
-    }
-
     if (msg_err == 0) {
         {
             
@@ -2080,6 +2089,17 @@ static int32_t lasso_hostRegisterTimestamp (void) {
 #endif
 
 
+/*!
+ *  \brief  Clear receive timeout and buffer index.
+ *
+ *  \return Void
+ */
+void lasso_clearReceiveTimeout(void) {
+    receiveBufferIndex = 0;
+    receiveTimeout = 0;
+}
+
+
 //----------------------//
 // Public functions API //
 //----------------------//
@@ -2146,7 +2166,26 @@ int32_t lasso_hostRegisterCOM (
 
 
 /*!
- *  \brief  Register user-supplied CTRLS function.
+ *  \brief  Register user-supplied callback for command received event.
+ *
+ *  \return Error code
+ */
+int32_t lasso_hostRegisterCMDRX (
+    lasso_cmdCallback cC            //!< user-supplied CMDRX function
+) {
+    if (cC) {
+        cmdCallback = cC;
+    }
+    else {
+        return EINVAL;
+    }
+
+    return 0;
+}
+
+
+/*!
+ *  \brief  Register user-supplied callback for controls received event.
  *
  *  \return Error code
  */
@@ -2419,11 +2458,11 @@ int32_t lasso_hostReceiveByte (
                 receiveBuffer[receiveBufferIndex - 1] = 0;
                 */
                 response.valid = receiveBufferIndex;
-                receiveBufferIndex = 0;
+                lasso_clearReceiveTimeout();
                 return 0;
             }
             else {
-                receiveBufferIndex = 0;
+                lasso_clearReceiveTimeout();
                 return EILSEQ;     // '\n' not allowed without prior '\r'
             }
         }
@@ -2433,7 +2472,7 @@ int32_t lasso_hostReceiveByte (
             receiveTimeout = LASSO_HOST_COMMAND_TIMEOUT_TICKS;
         }
         else {
-            receiveBufferIndex = 0;
+            lasso_clearReceiveTimeout();
             return ENOSPC;
         }
     }
@@ -2447,7 +2486,7 @@ int32_t lasso_hostReceiveByte (
         return ENOSPC;
     }
     
-    if (response.valid > LASSO_HOST_COMMAND_BUFFER_SIZE) {
+    if (response.valid > LASSO_HOST_COMMAND_BUFFER_SIZE) {  // this is an error condition of COBS_decode_inline
         
 #else // ESCS
     if (response.valid == 0) {
@@ -2457,13 +2496,13 @@ int32_t lasso_hostReceiveByte (
         return ENOSPC;
     }
     
-    if (response.valid > LASSO_HOST_COMMAND_BUFFER_SIZE) {
+    if (response.valid > LASSO_HOST_COMMAND_BUFFER_SIZE) {  // this is an error condition of ESCS_decode_inline
         
 #endif
 
-        // receive buffer overflow
-        receiveBufferIndex = 0;
-        
+        lasso_clearReceiveTimeout();
+
+        // notify client of receive buffer overflow        
         lasso_hostInterpreteCommand(EOVERFLOW);
 
         response.frame = response.buffer;   // load buffer start
@@ -2552,9 +2591,7 @@ void lasso_hostHandleCOM (void)
 
     // reset command reception in case of timeout
     if (receiveTimeout > 0) {
-        receiveTimeout--;
-
-        if (receiveTimeout == 0) {
+        if (--receiveTimeout == 0) {
             receiveBufferIndex = 0;
         }
     }
