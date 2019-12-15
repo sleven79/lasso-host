@@ -77,6 +77,7 @@
 // - for COBS encoding: frame size = 256
 // - for RN and ESC encoding: any multiple of 256 (up to 65536)
 // - usually, limit is defined by max. DMA transmission size or RAM limit
+// - on MAX32630FTHR, the limit is 64 Byte due to the USB bulk endpoint
 #define LASSO_HOST_MAX_FRAME_SIZE                   (4096)
 
 // Lasso host CRC Byte-width:

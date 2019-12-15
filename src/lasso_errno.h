@@ -44,6 +44,10 @@
     #define EINVAL 22       /* Invalid argument */
 #endif
 
+#ifndef ENOSPC
+    #define	ENOSPC 28		/* No space left on device */
+#endif
+
 #ifndef ENOMSG
     #define ENOMSG 35       /* No message of desired type */
 #endif
