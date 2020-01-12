@@ -173,8 +173,8 @@
 #define LASSO_DATACELL_BYTEWIDTH_4          (0x0004)
 #define LASSO_DATACELL_BYTEWIDTH_5          (0x0008)
 
-#define LASSO_DATACELL_ENABLE_MASK          (0x0001)
-#define LASSO_DATACELL_DISABLE_MASK         (0xFFFE)
+#define LASSO_DATACELL_ENABLE_MASK          (0x0001)    // enable for strobe
+#define LASSO_DATACELL_DISABLE_MASK         (0xFFFE)    // disable for strobe
 #define LASSO_DATACELL_BYTEWIDTH_MASK       (0x000E)
 #define LASSO_DATACELL_TYPE_MASK            (0x00F0)
 #define LASSO_DATACELL_TYPE_SHIFT           (4)
@@ -336,7 +336,7 @@ typedef struct DATACELL
     __attribute__((packed))
 #endif
 {
-    uint16_t type;              //!< see lasso_host.h for content
+    uint16_t ctrl;              //!< see lasso_host.h for content
     uint16_t count;             //!< data cell can be array of above atomic type
     const void* ptr;            //!< pointer to underlying memory cell
     const char* name;           //!< data cell name string
@@ -561,7 +561,7 @@ static void lasso_hostSampleDataCells (void) {
 #if (LASSO_HOST_STROBE_EXTERNAL_SOURCE == 0)
     uint8_t* dataSpaceBufferPtr = strobe.buffer;
     dataCell* dC = dataCellFirst;
-    uint16_t type;
+    uint16_t ctrl;
     uint16_t count;
     const void* ptr;
 #if (LASSO_HOST_UNALIGNED_MEMORY_ACCESS == 0)
@@ -607,8 +607,8 @@ static void lasso_hostSampleDataCells (void) {
 #endif
 
     while (dC) {
-        type = dC->type;
-        if (type & LASSO_DATACELL_ENABLE) {
+        ctrl = dC->ctrl;
+        if (ctrl & LASSO_DATACELL_STROBE) {
 #if (LASSO_HOST_STROBE_DYNAMICS == LASSO_STROBE_DYNAMIC)
             if ((--dC->update_rate & 0xFFFF) == 0) {
                 *dataCellMaskPtr |= dataCellMaskBit;        // set mask bit
@@ -619,7 +619,7 @@ static void lasso_hostSampleDataCells (void) {
                 count = dC->count;
                 ptr = dC->ptr;
 
-                switch (type & LASSO_DATACELL_BYTEWIDTH_MASK) {
+                switch (ctrl & LASSO_DATACELL_BYTEWIDTH_MASK) {
                     case LASSO_DATACELL_BYTEWIDTH_1 : {
                         while(count--) {
                             *dataSpaceBufferPtr++ = *(uint8_t*)ptr;
@@ -720,15 +720,15 @@ static dataCell* lasso_hostSeekDatacell (
     uint32_t* bytepos                       //!< Byte position in strobe frame
 ) {
     dataCell* dC = dataCellFirst;
-    uint16_t type;
+    uint16_t ctrl;
     uint32_t pos = 0;
 
     while (num && dC) {
-        type = dC->type;
-        if (type & LASSO_DATACELL_ENABLE) {
-            type &= LASSO_DATACELL_BYTEWIDTH_MASK;
-            if (type) {
-                pos += (uint32_t)dC->count * (uint32_t)type;
+        ctrl = dC->ctrl;
+        if (ctrl & LASSO_DATACELL_STROBE) {
+            ctrl &= LASSO_DATACELL_BYTEWIDTH_MASK;
+            if (ctrl) {
+                pos += (uint32_t)dC->count * (uint32_t)ctrl;
             }
             else {
                 pos += dC->count;
@@ -764,7 +764,7 @@ static void lasso_copyDatacellParams (
     len = sprintf(dest, "%s,", dC->name);
     dest += len;
 
-    len = sprintf(dest, "%u,", (unsigned short)dC->type);
+    len = sprintf(dest, "%u,", (unsigned short)dC->ctrl);
     dest += len;
 
     len = sprintf(dest, "%u,", (unsigned short)dC->count);
@@ -847,7 +847,7 @@ static int32_t lasso_copyDatacellValue (
     else {
 #endif
 
-    switch (dC->type & LASSO_DATACELL_TYPE_BYTEWIDTH_MASK) {
+    switch (dC->ctrl & LASSO_DATACELL_TYPE_BYTEWIDTH_MASK) {
         case LASSO_BOOL:
         case LASSO_UINT8: {
 #if (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
@@ -1025,27 +1025,39 @@ static int32_t lasso_hostSetDatacellValue (
     const char* cp = (const char*)rb;
 #endif
 
-    switch (dC->type & LASSO_DATACELL_TYPE_BYTEWIDTH_MASK) {
+    switch (dC->ctrl & LASSO_DATACELL_TYPE_BYTEWIDTH_MASK) {
         case LASSO_BOOL :
         case LASSO_UINT8 : {
             // read integer 0 or 1 (for bool) or 0 ... 255 (for uint8)
-            uint8_t u;
+            
+            // For compatibility with all 32-bit CPU targets, ensure that sscanf
+            // writes to 32-bit aligned target address (unsigned long,uint32_t).
+            
+            // Note: sscanf could be used with format "hhu" for an 8-bit aligned
+            // target address. However, "hhu" is not recognized by all compilers
+            // and may lead to reading into a 16-bit target. When only 8-bit are
+            // allocated as target address space, and these 8-bits are not word
+            // aligned, a HardFault exception will ensue on some CPU targets
+            // such as Cortex-M0.
+            uint32_t u;
 
 #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
             if (PackReaderGetUnsignedChar(frame_reader, &u)) {
 #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
-            if (sscanf(cp, "%hhu", (unsigned char*)&u) != 1) {
+            //if (sscanf(cp, "%hhu", (unsigned char*)&u) != 1) {
+            if (sscanf(cp, "%lu", (unsigned long*)&u) != 1) {
 #else
     // todo
 #endif
                 return EINVAL;
             }
 
+            // do not store in datacell if callback refuses input
             if (dC->onChange) {
-                if (!dC->onChange((void* const)&u)) break;   // do not store in datacell if callback refuses input
+                if (!dC->onChange((uint8_t* const)&u)) break;   
             }
 
-            *(uint8_t*)dC->ptr = u;
+            *(uint8_t*)dC->ptr = (uint8_t)u;
             break;
         }
 
@@ -1094,20 +1106,22 @@ static int32_t lasso_hostSetDatacellValue (
         }
 
         case LASSO_INT8 : {
-            int8_t i;
+            int32_t i;  // see above why 32-bit sscanf target and not 8-bit
 
 #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
             if (PackReaderGetSignedChar(frame_reader, &i)) {
 #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
-            if (sscanf(cp, "%hhi", (signed char*)&i) != 1) {
+            //if (sscanf(cp, "%hhi", (signed char*)&i) != 1) {
+            if (sscanf(cp, "%li", (signed long*)&i) != 1) {
 #else
     // todo
 #endif
                 return EINVAL;
             }
 
+            // do not store in datacell if callback refuses input
             if (dC->onChange) {
-                if (!dC->onChange((void* const)&i)) break;   // do not store in datacell if callback refuses input
+                if (!dC->onChange((int8_t* const)&i)) break;   
             }
 
             *(int8_t*)dC->ptr = (int8_t)i;
@@ -1115,7 +1129,8 @@ static int32_t lasso_hostSetDatacellValue (
         }
 
         case LASSO_UINT16 : {
-            uint16_t u;
+            uint16_t u; // 16-bit alignment should be fine even on most
+                        // (all?) 32-bit CPU architectures, including Cortex-M0
 
 #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
             if (PackReaderGetUnsignedShort(frame_reader, &u)) {
@@ -1136,7 +1151,8 @@ static int32_t lasso_hostSetDatacellValue (
         }
 
         case LASSO_INT16 : {
-            int16_t i;
+            int16_t i;  // 16-bit alignment should be fine even on most
+                        // (all?) 32-bit CPU architectures, including Cortex-M0
 
 #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
             if (PackReaderGetSignedShort(frame_reader, &i)) {
@@ -1806,25 +1822,25 @@ static void lasso_hostInterpreteCommand (
                 #endif
                         if (msg_err) break;
 
-                        lparam = dC->type & LASSO_DATACELL_ENABLE_MASK;
+                        lparam = dC->ctrl & LASSO_DATACELL_ENABLE_MASK;
                         if (bparam) {
                             if (!lparam) {
-                                lparam = (uint32_t)(dC->type & LASSO_DATACELL_BYTEWIDTH_MASK);
+                                lparam = (uint32_t)(dC->ctrl & LASSO_DATACELL_BYTEWIDTH_MASK);
                                 if (lparam == 0) {
                                     lparam = 1;
                                 }
                                 strobe.Bytes_total += (uint32_t)dC->count * lparam;
-                                dC->type |= LASSO_DATACELL_ENABLE_MASK;
+                                dC->ctrl |= LASSO_DATACELL_ENABLE_MASK;
                             }
                         }
                         else {
                             if (lparam) {
-                                lparam = (uint32_t)(dC->type & LASSO_DATACELL_BYTEWIDTH_MASK);
+                                lparam = (uint32_t)(dC->ctrl & LASSO_DATACELL_BYTEWIDTH_MASK);
                                 if (lparam == 0) {
                                     lparam = 1;
                                 }
                                 strobe.Bytes_total -= (uint32_t)dC->count * lparam;
-                                dC->type &= LASSO_DATACELL_DISABLE_MASK;
+                                dC->ctrl &= LASSO_DATACELL_DISABLE_MASK;
                             }
                         }
                     }
@@ -1855,7 +1871,7 @@ static void lasso_hostInterpreteCommand (
                     dC = lasso_hostSeekDatacell(cparam, &lparam);
 
                     if (dC) {
-                        if (dC->type & LASSO_DATACELL_WRITEABLE) {
+                        if (dC->ctrl & LASSO_DATACELL_WRITEABLE) {
                         #if (LASSO_HOST_STROBE_EXTERNAL_SOURCE != 0)
                             // temporarily use receiverBuffer for storage of interpreted value
                             // in fact, incoming values are not passed on into external source space ...
@@ -2074,7 +2090,7 @@ static bool lasso_hostTransmitDataFrame (
  */
 #if (LASSO_HOST_TIMESTAMP == 1)
 static int32_t lasso_hostRegisterTimestamp (void) {
-    return lasso_hostRegisterDataCell(LASSO_UINT32 | LASSO_DATACELL_ENABLE,
+    return lasso_hostRegisterDataCell(LASSO_UINT32,
                                       1,
                                       (void*)&lasso_timestamp,
                                       "Timestamp",
@@ -2209,7 +2225,7 @@ int32_t lasso_hostRegisterCTRLS (
  *  \return Error code
  */
 int32_t lasso_hostRegisterDataCell (
-    uint16_t type,                      //!< memory cell type
+    uint16_t ctrl,                      //!< memory cell control/type
     uint16_t count,                     //!< array size
     const void* ptr,                    //!< pointer to memory cell
     const char* const name,             //!< identifier string
@@ -2237,14 +2253,17 @@ int32_t lasso_hostRegisterDataCell (
     }
     dataCellLast = dC;
 
+    // invert bit that enables/disables datacell for default strobing
+    ctrl ^= LASSO_DATACELL_NOSTROBE;
+    
 #if (LASSO_HOST_STROBE_EXTERNAL_SOURCE != 0)
     type |= LASSO_DATACELL_PERMANENT;
 #endif
 
-    if (type & LASSO_DATACELL_PERMANENT) {
-        type |= LASSO_DATACELL_ENABLE;
+    if (ctrl & LASSO_DATACELL_PERMANENT) {
+        ctrl |= LASSO_DATACELL_STROBE;
     }
-    dC->type        = type;
+    dC->ctrl        = ctrl;
     dC->count       = count;
 #if (LASSO_HOST_STROBE_EXTERNAL_SOURCE == 0)
     if (ptr == NULL) {
@@ -2262,15 +2281,15 @@ int32_t lasso_hostRegisterDataCell (
 #endif
     dC->next        = NULL;
 
-    if (type & LASSO_DATACELL_BYTEWIDTH_MASK) {
-        dC_Bytes = (uint32_t)count * (uint32_t)(type & LASSO_DATACELL_BYTEWIDTH_MASK);
+    if (ctrl & LASSO_DATACELL_BYTEWIDTH_MASK) {
+        dC_Bytes = (uint32_t)count * (uint32_t)(ctrl & LASSO_DATACELL_BYTEWIDTH_MASK);
     }
     else {
         dC_Bytes = (uint32_t)count;
     }
     strobe.Bytes_max += dC_Bytes;
 
-    if (type & LASSO_DATACELL_ENABLE_MASK) {
+    if (ctrl & LASSO_DATACELL_ENABLE_MASK) {
         strobe.Bytes_total += dC_Bytes;
     }
 

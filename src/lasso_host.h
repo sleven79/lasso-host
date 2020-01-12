@@ -36,7 +36,7 @@
 // Definitions related to data cells //
 //-----------------------------------//
 
-// type codes:
+// control/type codes:
 // b0: strobe enabled
 // b1: Byte-width = 2       if bits 1-3 = 0b000 -> Byte-width = 1
 // b2: Byte-width = 4
@@ -52,7 +52,12 @@
 // b9: permanent strobe member
 // b10-b15: reserved
 
-#define LASSO_DATACELL_ENABLE       (0x0001)    //!< default strobe member?
+#define LASSO_DATACELL_STROBE       (0x0001)    //!< default strobe member? 
+                                                // default is enable for strobe
+                                                // in RegisterDataCell() unless:
+#define LASSO_DATACELL_NOSTROBE     (0x0001)    //!< no default strobe member?
+                                                // when or'ed into ctrl param in 
+                                                // call to RegisterDataCell()
 
 #define LASSO_BOOL                  (0x0000)
 #define LASSO_CHAR                  (0x0010)
