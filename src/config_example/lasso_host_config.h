@@ -163,6 +163,11 @@
 // - any of (ASCII, MSGPACK) for other encodings
 #define LASSO_HOST_PROCESSING_MODE                  LASSO_ASCII_MODE
 
+// Lasso host enable notifications?
+// - only for full ESCS/COBS modes (command/response & strobe)
+// - 1=enable, 0=disable
+#define LASSO_HOST_NOTIFICATIONS                    (0)
+#define LASSO_HOST_NOTIFICATION_BUFFER_SIZE         (256)
 
 #ifdef __cplusplus
 extern "C" {

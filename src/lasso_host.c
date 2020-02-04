@@ -1,7 +1,7 @@
 /******************************************************************************/
 /*                                                                            */
 /*  \file       lasso_host.c                                                  */
-/*  \date       Jan 2017 - Feb 2019                                           */
+/*  \date       Jan 2017 - Feb 2020                                           */
 /*  \author     Severin Leven                                                 */
 /*                                                                            */
 /*  \brief      Lasso host (data server) library                              */
@@ -153,6 +153,7 @@
 // Lasso host input commands (valid commands are in ASCII space 0...127)
 #define LASSO_HOST_INVALID_OPCODE           (0)     //!< invalid opcode
 #define LASSO_HOST_SET_ADVERTISE            'A'     //!< enable advertising
+#define LASSO_HOST_SEND_NOTIFICATION        'N'     //!< send notification
 #define LASSO_HOST_SET_STROBE_PERIOD        'P'     //!< set strobe period
 #define LASSO_HOST_SET_DATACELL_STROBE      'S'     //!< set data cell strobe
 #define LASSO_HOST_SET_DATACELL_VALUE       'V'     //!< set value of data cell
@@ -186,6 +187,15 @@
     #define LASSO_HOST_COMMAND_ENCODING LASSO_ENCODING_RN
 #endif
 
+#ifndef LASSO_HOST_STROBE_ENCODING
+    #define LASSO_HOST_STROBE_ENCODING LASSO_ENCODING_NONE
+#endif
+
+#if (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_NONE)
+    #if (LASSO_HOST_NOTIFICATIONS == 1)
+        #error Notifications can only be used in full ESCS/COBS encoding mode
+    #endif
+#endif
 
 // Lasso host memory alignment policy
 #ifndef LASSO_MEMORY_ALIGN
@@ -212,6 +222,13 @@
     #endif
     #if (LASSO_HOST_RESPONSE_BUFFER_SIZE > 256)
         #error Maximum for LASSO_HOST_RESPONSE_BUFFER_SIZE is 256
+    #endif
+#endif
+
+// Lasso host outgoing (notification) buffer size (default, unlimited)
+#if (LASSO_HOST_NOTIFICATIONS == 1)
+    #ifndef LASSO_HOST_NOTIFICATION_BUFFER_SIZE
+        #define LASSO_HOST_NOTIFICATION_BUFFER_SIZE     (256)
     #endif
 #endif
 
@@ -393,18 +410,21 @@ static lasso_ctlCallback ctlCallback = NULL;    //!< controls changed
 static lasso_cmdCallback cmdCallback = NULL;    //!< command received
 
 static dataFrame strobe = \
-    { LASSO_HOST_STROBE_PERIOD_TICKS, 0, true , NULL, NULL, 0, 0, 0};
+    { LASSO_HOST_STROBE_PERIOD_TICKS, 0, true, NULL, NULL, 0, 0, 0};
 
 static dataFrame response = \
     { LASSO_HOST_ROUNDTRIP_LATENCY_TICKS, 0, false, NULL, NULL, 0, \
         LASSO_HOST_RESPONSE_BUFFER_SIZE, 0};
 
+static dataFrame notification = \
+    { 0, 0, false, NULL, NULL, 0, \
+        LASSO_HOST_NOTIFICATION_BUFFER_SIZE, 0};
+        
 static uint16_t lasso_strobe_period = LASSO_HOST_STROBE_PERIOD_TICKS;
 //!< at each expiration, strobe period is reloaded from here
 
 static uint16_t lasso_tick_period = LASSO_HOST_TICK_PERIOD_MS;
 //!< tick period can programmatically be changed at run-time
-
 
 static uint16_t lasso_roundtrip_latency_ticks = LASSO_HOST_ROUNDTRIP_LATENCY_TICKS;
 
@@ -1029,10 +1049,10 @@ static int32_t lasso_hostSetDatacellValue (
         case LASSO_BOOL :
         case LASSO_UINT8 : {
             // read integer 0 or 1 (for bool) or 0 ... 255 (for uint8)
-            
+
             // For compatibility with all 32-bit CPU targets, ensure that sscanf
             // writes to 32-bit aligned target address (unsigned long,uint32_t).
-            
+
             // Note: sscanf could be used with format "hhu" for an 8-bit aligned
             // target address. However, "hhu" is not recognized by all compilers
             // and may lead to reading into a 16-bit target. When only 8-bit are
@@ -1054,7 +1074,7 @@ static int32_t lasso_hostSetDatacellValue (
 
             // do not store in datacell if callback refuses input
             if (dC->onChange) {
-                if (!dC->onChange((uint8_t* const)&u)) break;   
+                if (!dC->onChange((uint8_t* const)&u)) break;
             }
 
             *(uint8_t*)dC->ptr = (uint8_t)u;
@@ -1121,7 +1141,7 @@ static int32_t lasso_hostSetDatacellValue (
 
             // do not store in datacell if callback refuses input
             if (dC->onChange) {
-                if (!dC->onChange((int8_t* const)&i)) break;   
+                if (!dC->onChange((int8_t* const)&i)) break;
             }
 
             *(int8_t*)dC->ptr = (int8_t)i;
@@ -1349,7 +1369,7 @@ static void lasso_hostInterpreteCommand (
     int32_t rx_err              //!< receive buffer overflow? incomplete command?
 ) {
     int32_t  msg_err = 0;       // error during message processing
-    
+
 #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
     uint32_t opcode;            // opcode ID
 #else
@@ -1411,32 +1431,32 @@ static void lasso_hostInterpreteCommand (
             opcode = LASSO_HOST_INVALID_OPCODE;
             msg_err = ENOMSG;
         }
-        
+
         if (nargs != 2) { // expect 1) opcode and 2) array of params
-            msg_err = ENOMSG;   
+            msg_err = ENOMSG;
         }
-        
+
         if (rx_err != 0) {  // receive buffer overflow? incomplete command?
             msg_err = rx_err;
         }
-        
+
         // prepare response frame
         PackWriterSetBuffer(&frame_writer, responseBuffer, LASSO_HOST_RESPONSE_BUFFER_SIZE);
         PackWriterOpen(&frame_writer, E_PackTypeArray, 3);
-        PackWriterPutUnsignedInteger(&frame_writer, opcode);    // send opcode back          
+        PackWriterPutUnsignedInteger(&frame_writer, opcode);    // send opcode back
     }
-        
+
     if (msg_err == 0) { // if ok so far, start reading parameter array
         msg_err = PackReaderOpen(&frame_reader, E_PackTypeArray, &nargs);
-            
+
         if (msg_err == 0) {
-            
+
 #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
     if (msg_err == 0) {
         msg_err = sscanf((const char*)receiverBuffer++, "%c", &opcode);
         if (msg_err == 1) { // received the expected opcode
-            msg_err = sprintf((char*)responseBuffer++, "%c", opcode);        
-            
+            msg_err = sprintf((char*)responseBuffer++, "%c", opcode);
+
             if (msg_err == 1) {
                 msg_err = 0;
             }
@@ -1450,17 +1470,17 @@ static void lasso_hostInterpreteCommand (
             msg_err = rx_err;
         }
     }
-    
+
     if (msg_err == 0) {
         {
-            
+
 #else
     // future option, todo
     opcode = *receiverBuffer++;  // max. 256 opcodes allowed here, but some are reserved, e.g. 0 = invalid opcode
     *responseBuffer++ = opcode;
     {
         {
-            
+
 #endif
         // Unless COBS or ESC encoding has been chosen for command/response and strobe frames:
         // - for GET command opcodes (>= 'a'), response & strobe interleaving is impossible
@@ -1470,7 +1490,7 @@ static void lasso_hostInterpreteCommand (
                 return;
             }
         #endif
-        
+
             switch (opcode) {
                 // LASSO_HOST_GET_x functions
                 case LASSO_HOST_GET_PROTOCOL_INFO : {
@@ -1912,7 +1932,7 @@ static void lasso_hostInterpreteCommand (
             }
         }
     }
-            
+
 #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
     if (tiny_reply) {
         PackWriterOpen(&frame_writer, E_PackTypeArray, 0);
@@ -1960,9 +1980,9 @@ static void lasso_hostInterpreteCommand (
 
     // no CRC generation allowed
 #else
-    
+
 #if (LASSO_HOST_PROCESSING_MODE != LASSO_MSGPACK_MODE)
-    
+
 // correct transmission length for COBS
 #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
     response.Bytes_total -= 2;  // COBS header does not count as payload Bytes
@@ -2255,7 +2275,7 @@ int32_t lasso_hostRegisterDataCell (
 
     // invert bit that enables/disables datacell for default strobing
     ctrl ^= LASSO_DATACELL_NOSTROBE;
-    
+
 #if (LASSO_HOST_STROBE_EXTERNAL_SOURCE != 0)
     type |= LASSO_DATACELL_PERMANENT;
 #endif
@@ -2460,7 +2480,7 @@ int32_t lasso_hostReceiveByte (
     uint8_t b                   //!< char from serial port
 ) {
 #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_RN)
-    if (receiveBufferIndex < LASSO_HOST_COMMAND_BUFFER_SIZE) {    
+    if (receiveBufferIndex < LASSO_HOST_COMMAND_BUFFER_SIZE) {
         if (b == '\n') {
             if (receiveBufferIndex == 0) {
                 return ENODATA;
@@ -2471,10 +2491,10 @@ int32_t lasso_hostReceiveByte (
                 //    -> seems unnecessary for sscanf (works with '\r')
                 //    -> however, in case of "LASSO_HOST_SET_DATACELL_VALUE"
                 //       a terminating NULL character is useful
+                receiveBuffer[receiveBufferIndex - 1] = 0;
                 //    -> moved to lasso_hostInterpreteCommand()
                 // 2) CRC check
                 //    -> not used for RN encoding
-                receiveBuffer[receiveBufferIndex - 1] = 0;
                 */
                 response.valid = receiveBufferIndex;
                 lasso_clearReceiveTimeout();
@@ -2496,17 +2516,17 @@ int32_t lasso_hostReceiveByte (
         }
     }
     else {
-    
+
 #elif (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
     if (response.valid == 0) {
-        response.valid = COBS_decode_inline(b, receiveBuffer, LASSO_HOST_COMMAND_BUFFER_SIZE);                
+        response.valid = COBS_decode_inline(b, receiveBuffer, LASSO_HOST_COMMAND_BUFFER_SIZE);
     }
     else {
         return ENOSPC;
     }
-    
+
     if (response.valid > LASSO_HOST_COMMAND_BUFFER_SIZE) {  // this is an error condition of COBS_decode_inline
-        
+
 #else // ESCS
     if (response.valid == 0) {
         response.valid = ESCS_decode_inline(b, receiveBuffer, LASSO_HOST_COMMAND_BUFFER_SIZE);
@@ -2514,29 +2534,84 @@ int32_t lasso_hostReceiveByte (
     else {
         return ENOSPC;
     }
-    
+
     if (response.valid > LASSO_HOST_COMMAND_BUFFER_SIZE) {  // this is an error condition of ESCS_decode_inline
-        
+
 #endif
 
         lasso_clearReceiveTimeout();
 
-        // notify client of receive buffer overflow        
+        // notify client of receive buffer overflow
         lasso_hostInterpreteCommand(EOVERFLOW);
 
         response.frame = response.buffer;   // load buffer start
-        response.Byte_count = response.Bytes_total;
+        response.Byte_count = response.Bytes_total; // trigger transmission
 
     #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
         response.COBS_backup = response.buffer[2];
-    #endif        
-            
-        response.valid = 0;    
+    #endif
+
+        response.valid = 0;
         return EOVERFLOW;
     }
 
     return 0;
 }
+
+
+/*!
+ *  \brief  Send a notification to Lasso client.
+ *
+ *  Note 1: Notification are only possible in full ESCS/COBS encoding modes.
+ *  Note 2: Notifications do not come with a CRC.
+ *
+ *  \return Error code
+ */
+#if (LASSO_HOST_NOTIFICATIONS == 1)
+int32_t lasso_hostSendNotification (
+    const char* msg             //!< notification string
+) {
+    uint8_t* notificationBuffer = notification.buffer;
+    size_t len = strlen(msg);
+    
+    if (len < LASSO_HOST_NOTIFICATION_BUFFER_SIZE) {
+    #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
+        *notificationBuffer = 0xFF; // indicate that buffer has not been COBS en-
+                                    // coded yet, COBS itself places a 0x00 here
+        notificationBuffer += 2;    // access space behind COBS header
+    #endif
+
+    #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
+        *notificationBuffer = 0;    // this will launch the ESCS encoder
+        notificationBuffer += notification.Bytes_max;   // access 2nd half of buffer
+    #endif
+        
+        // install default notification opcode
+        *notificationBuffer++ = LASSO_HOST_SEND_NOTIFICATION;
+
+        strcpy(&notificationBuffer[1], msg);    // copy msg to local buffer
+        notificationBuffer += len;
+        notification.Bytes_total = notificationBuffer - notification.buffer;
+        
+    // correct transmission length for COBS
+    #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
+        notification.Bytes_total -= 2;  // COBS header does not count as payload Bytes
+    #endif
+
+    // correct transmission length for ESCS
+    #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
+        notification.Bytes_total -= notification.Bytes_max;   // correct initial offset
+    #endif        
+
+        notification.frame = notification.buffer;   // load buffer start
+        notification.Byte_count = notification.Bytes_total; // trigger transmission
+        
+        return 0;
+    }
+    
+    return ENOSPC;
+}
+#endif
 
 
 /*!
@@ -2644,7 +2719,7 @@ void lasso_hostHandleCOM (void)
                 lasso_hostSampleDataCells();
 
                 strobe.frame = strobe.buffer;           // load buffer start
-                strobe.Byte_count = strobe.Bytes_total; // load Byte count
+                strobe.Byte_count = strobe.Bytes_total; // trigger transmission
 
             #if (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_COBS)
                 strobe.COBS_backup = strobe.buffer[2];  // save Byte crushed by
@@ -2674,7 +2749,7 @@ void lasso_hostHandleCOM (void)
                         lasso_hostInterpreteCommand(0);
 
                         response.frame = response.buffer;   // load buffer start
-                        response.Byte_count = response.Bytes_total;
+                        response.Byte_count = response.Bytes_total; // trigger transmission
 
                     #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
                         response.COBS_backup = response.buffer[2];
@@ -2694,8 +2769,14 @@ void lasso_hostHandleCOM (void)
 
     // 1) responses frames are sent only if no strobe is being sent
     // 2) the first free slot after a strobe is assigned to a response frame
+    // 3) notifications are only sent if not busy with strobe or response frames
     if (strobe.Byte_count == 0) {
-        lasso_hostTransmitDataFrame(&response);
+        if (response.Byte_count == 0) {
+            lasso_hostTransmitDataFrame(&notification);
+        }
+        else {
+            lasso_hostTransmitDataFrame(&response);
+        }
     }
     else {
         lasso_hostTransmitDataFrame(&strobe);
