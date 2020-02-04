@@ -23,27 +23,30 @@
 /*                                                                            */
 /*  Lasso host                                                                */
 /*  - makes datacells available to remote client through a serial link        */
-/*  - provides efficient real-time periodic transmission of datacells values  */
+/*  - provides efficient real-time, periodic transmission of the dataspace    */
 /*  - provides an interface to interprete commands sent by client:            */
 /*      - to configure data space                                             */
 /*      - to configure update rate                                            */
 /*      - to write into data cells                                            */
 /*  - a special real-time periodic command mode is possible (R/C mode)        */
+/*  - sends asynchronous notifications (debug messages) to the client         */
 /*  - relies on an external, target-specific communication ressource          */
 /*  - provides strategies to avoid loss of synchronization & data integrity:  */
 /*      - different serialization modes/encodings (ascii, msgpack)            */
 /*      - different escaping strategies (RN, ESCS, COBS)                      */
 /*      - addition of cyclic redundancy check (CRC)                           */
+/*      - timestamps                                                          */
 /*  - must be hooked onto user-supplied, periodic timing ressource            */
 /*  - is written in C and relies on standard C libraries (e.g. newlib)        */
 /*  - is compatible with embedded uC and uP targets                           */
 /*  - provides various hooks for customization (COM, CRC, user callbacks)     */
 /*                                                                            */
 /*  Lasso client                                                              */
-/*  - discovers data cells that host has to offer (data space)                */
-/*  - interacts (asynchronously) with host through set of commands            */
-/*  - configures desired data space, update rate and writes to data cells     */
+/*  - discovers datacells that host has to offer (data space)                 */
+/*  - interacts (asynchronously) with host through set of commands/responses  */
+/*  - configures desired dataspace, update rate and writes to datacells       */
 /*  - receives strobed bulk data and displays or logs it                      */
+/*  - receives asynchronous notifications (debug messages) from host          */
 /*  - typical target is a PC or tablet computer with a serial link            */
 /*                                                                            */
 /*  Lasso philosophy                                                          */
@@ -92,11 +95,12 @@
 /*                                                                            */
 /*  Heap requirements                                                         */
 /*  - N dataCell structs (28 Bytes each, 32 on non-packed systems)            */
-/*  - 2 dataFrame structs (24 Bytes each, 32 on non-packed systems)           */
+/*  - 2/3 dataFrame structs (24 Bytes each, 32 on non-packed systems)         */
 /*  - strobe buffer (depends on size of memory cells linked to DCs)           */
 /*  - some overhead for msgpack, CRC, RN, ESC, COBS coding (max. 16 Bytes)    */
 /*  - receive (incoming) buffer size                                          */
 /*  - response (outgoing) buffer size                                         */
+/*  - notification (outgoing) buffer size (if notifications are enabled)      */
 /*                                                                            */
 /*  - Example: N = 4, e.g. 2x float, 1x 100*uint8, 1x char[10]                */
 /*         ->: 128 Bytes max for dataCell structs                             */
@@ -105,7 +109,7 @@
 /*              16 Bytes for strobe buffer overhead                           */
 /*              32 Bytes for receive buffer (example)                         */
 /*              96 Bytes for response buffer (example)                        */
-/*           = 454 Bytes                                                      */
+/*           = 454 Bytes (notifications disabled)                             */
 /*                                                                            */
 /******************************************************************************/
 
@@ -416,9 +420,11 @@ static dataFrame response = \
     { LASSO_HOST_ROUNDTRIP_LATENCY_TICKS, 0, false, NULL, NULL, 0, \
         LASSO_HOST_RESPONSE_BUFFER_SIZE, 0};
 
+#if (LASSO_HOST_NOTIFICATIONS == 1)
 static dataFrame notification = \
     { 0, 0, false, NULL, NULL, 0, \
         LASSO_HOST_NOTIFICATION_BUFFER_SIZE, 0};
+#endif
         
 static uint16_t lasso_strobe_period = LASSO_HOST_STROBE_PERIOD_TICKS;
 //!< at each expiration, strobe period is reloaded from here
@@ -2035,7 +2041,7 @@ static bool lasso_hostTransmitDataFrame (
 
     #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
     #if (LASSO_HOST_COMMAND_ENCODING != LASSO_HOST_STROBE_ENCODING)
-        if (ptr == &response) {
+        if (ptr != &strobe) {
     #else
         if (!lasso_advertise) {
     #endif
@@ -2074,7 +2080,7 @@ static bool lasso_hostTransmitDataFrame (
 
     #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
     #if (LASSO_HOST_COMMAND_ENCODING != LASSO_HOST_STROBE_ENCODING)
-        if (ptr == &response) {
+        if (ptr != &strobe) {
     #else
         if (!lasso_advertise) {
     #endif
@@ -2353,67 +2359,88 @@ int32_t lasso_hostRegisterDataCell (
  */
 int32_t lasso_hostRegisterMEM (void) {
 
-    // in strobe ESCS or COBS encoding, an "invalid" MessagePack code is
-    // inserted before strobe packet for interleaving with responses packet
-    #if (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_ESCS) || \
-        (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_COBS)
-        strobe.Bytes_max += 1;
-        strobe.Bytes_total += 1;
-    #endif
+// ----------- //
+// STROBE PART //
+// ----------- //
 
-    // add space for dynamic strobing information at the beginning of strobe packet
-    #if (LASSO_HOST_STROBE_DYNAMICS == LASSO_STROBE_DYNAMIC)
-        dataCellMaskBytes = ((dataCellCount - 1) >> 3) + 1;
-        strobe.Bytes_max += dataCellMaskBytes;
-        strobe.Bytes_total += dataCellMaskBytes;
-    #endif
+// in strobe ESCS or COBS encoding, an "invalid" MessagePack code is
+// inserted before strobe packet for interleaving with responses packet
+#if (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_ESCS) || \
+    (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_COBS)
+    strobe.Bytes_max += 1;
+    strobe.Bytes_total += 1;
+#endif
 
-    // add space for CRC to end of strobe packet
-    #if (LASSO_HOST_STROBE_CRC_ENABLE == 1)
-        strobe.Bytes_max += LASSO_HOST_CRC_BYTEWIDTH;
-        strobe.Bytes_total += LASSO_HOST_CRC_BYTEWIDTH;
-    #endif
+// add space for dynamic strobing information at the beginning of strobe packet
+#if (LASSO_HOST_STROBE_DYNAMICS == LASSO_STROBE_DYNAMIC)
+    dataCellMaskBytes = ((dataCellCount - 1) >> 3) + 1;
+    strobe.Bytes_max += dataCellMaskBytes;
+    strobe.Bytes_total += dataCellMaskBytes;
+#endif
 
-    // add space for CRC to end of response packet
-    #if (LASSO_HOST_COMMAND_CRC_ENABLE == 1)
-        response.Bytes_max += LASSO_HOST_CRC_BYTEWIDTH;
-    #endif
+// add space for CRC to end of strobe packet
+#if (LASSO_HOST_STROBE_CRC_ENABLE == 1)
+    strobe.Bytes_max += LASSO_HOST_CRC_BYTEWIDTH;
+    strobe.Bytes_total += LASSO_HOST_CRC_BYTEWIDTH;
+#endif
 
-    // ESCS encoding requires substantial (worst case) overhead
-    #if (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_ESCS)
-        strobe.Bytes_max += 2;      // start and end delimiter
-        //strobe.Bytes_max *= 2;      // worst case (see further below)
+// ESCS encoding requires substantial (worst case) overhead
+#if (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_ESCS)
+    strobe.Bytes_max += 2;      // start and end delimiter
+    //strobe.Bytes_max *= 2;      // worst case (see further below)
 
-    // COBS encoding always requires constant overhead
-    #elif (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_COBS)
-        strobe.Bytes_max += 3;      // exactly 3 Bytes
-        //strobe.Bytes_total += 3;  // Bytes_total must not include the COBS overhead
+// COBS encoding always requires constant overhead
+#elif (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_COBS)
+    strobe.Bytes_max += 3;      // start/end delimiter + COBS code
+    //strobe.Bytes_total += 3;  // must not include the COBS overhead
 
-    // NONE (no encoding) supported
-    #elif (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_NONE)
+// NONE (no encoding) supported
+#elif (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_NONE)
 
-    //  RN strobe encoding not supported
-    #else
-        #error "Unsupported strobe encoding"
-    #endif
+//  RN strobe encoding not supported
+#else
+    #error "Unsupported strobe encoding"
+#endif
 
-    // ESCS encoding requires substantial (worst case) overhead
-    #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
-        response.Bytes_max += 2;    // start and end delimiter
-        //response.Bytes_max *= 2;    // worst case (see further below)
 
-    // COBS encoding always requires constant overhead
-    #elif (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
-        response.Bytes_max += 3;    // start and end delimiter + COBS code
+//----------------------------//
+// RESPONSE/NOTIFICATION PART //
+//----------------------------//
 
-    // RN encoding always requires constant overhead
-    #elif (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_RN)
-        response.Bytes_max += 2;    // two end delimiters
+// add space for CRC to end of response packet (notifications have no CRC)
+#if (LASSO_HOST_COMMAND_CRC_ENABLE == 1)
+    response.Bytes_max += LASSO_HOST_CRC_BYTEWIDTH;
+#endif    
 
-    // NONE (no encoding) not supported
-    #else
-        #error "unsupported response encoding"
-    #endif
+// ESCS encoding requires substantial (worst case) overhead
+#if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
+    response.Bytes_max += 2;    // start and end delimiter
+    //response.Bytes_max *= 2;    // worst case (see further below)
+#if (LASSO_HOST_NOTIFICATIONS == 1)
+    notification.Bytes_max += 2;
+    //notification.Bytes_max *= 2;    // worst case (see further below)
+#endif
+    
+// COBS encoding always requires constant overhead
+#elif (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
+    response.Bytes_max += 3;    // start and end delimiter + COBS code
+#if (LASSO_HOST_NOTIFICATIONS == 1)
+    notifications.Bytes_max += 3;
+#endif
+
+// RN encoding always requires constant overhead (no notifications)
+#elif (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_RN)
+    response.Bytes_max += 2;    // two end delimiters
+
+// NONE (no encoding) not supported
+#else
+    #error "Unsupported command/response/notification encoding"
+#endif
+
+    
+//-----------------//
+// ALLOCATE MEMORY //
+//-----------------//
 
     // align requirement to system (user) specific boundary (e.g. %4==0)
     if (strobe.Bytes_max & (LASSO_MEMORY_ALIGN - 1)) {
@@ -2425,6 +2452,13 @@ int32_t lasso_hostRegisterMEM (void) {
         response.Bytes_max &= ~(LASSO_MEMORY_ALIGN - 1);
         response.Bytes_max += LASSO_MEMORY_ALIGN;
     }
+    
+#if (LASSO_HOST_NOTIFICATIONS == 1)    
+    if (notification.Bytes_max & (LASSO_MEMORY_ALIGN - 1)) {
+        notification.Bytes_max &= ~(LASSO_MEMORY_ALIGN - 1);
+        notification.Bytes_max += LASSO_MEMORY_ALIGN;
+    }    
+#endif
 
     // ESCS uses a special memory allocation scheme (see further below)
     #if (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_ESCS)
@@ -2432,8 +2466,11 @@ int32_t lasso_hostRegisterMEM (void) {
     #endif
     #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
         response.Bytes_max *= 2;
+    #if (LASSO_HOST_NOTIFICATIONS == 1)
+        notification.Bytes_max *= 2;   
     #endif
-
+    #endif
+    
     // don't allocate if strobe source is an external, user-specified buffer
 #if (LASSO_HOST_STROBE_EXTERNAL_SOURCE == 0)
     strobe.buffer = (uint8_t*)LASSO_HOST_MALLOC(strobe.Bytes_max);
@@ -2451,6 +2488,13 @@ int32_t lasso_hostRegisterMEM (void) {
     if (receiveBuffer == NULL) {
         return ENOMEM;
     }
+    
+#if (LASSO_HOST_NOTIFICATIONS == 1)
+    notification.buffer = (uint8_t*)LASSO_HOST_MALLOC(notification.Bytes_max);
+    if (notification.buffer == NULL) {
+        return ENOMEM;
+    }
+#endif
 
     // ESCS uses a special memory allocation scheme:
     // 1) twice the minimum memory requirement (worst case) has been allocated
@@ -2460,12 +2504,15 @@ int32_t lasso_hostRegisterMEM (void) {
     // 4) data is written to upper half of buffer (offset = strobe.Bytes_max)
     // 5) data is encoded to lower half of buffer (offset = 0)
     //    (-> may crush data in upper half of buffer without consequence)
-    #if (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_ESCS)
-        strobe.Bytes_max /= 2;
-    #endif
-    #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
-        response.Bytes_max /= 2;
-    #endif
+#if (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_ESCS)
+    strobe.Bytes_max /= 2;
+#endif
+#if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
+    response.Bytes_max /= 2;
+#if (LASSO_HOST_NOTIFICATIONS == 1)
+    notification.Bytes_max /= 2;
+#endif
+#endif
 
     return 0;
 }

@@ -165,9 +165,14 @@
 
 // Lasso host enable notifications?
 // - only for full ESCS/COBS modes (command/response & strobe)
+// - adopts same encoding scheme as command/response/strobe
+// - does not use CRC
 // - 1=enable, 0=disable
 #define LASSO_HOST_NOTIFICATIONS                    (0)
+
+// Adjust notification size reasonable (max expected debug message length)
 #define LASSO_HOST_NOTIFICATION_BUFFER_SIZE         (256)
+
 
 #ifdef __cplusplus
 extern "C" {
