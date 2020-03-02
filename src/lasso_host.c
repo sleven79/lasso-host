@@ -119,6 +119,7 @@
 //----------//
 
 #include "lasso_host.h"
+#include "lasso_defaults.h"
 #include "lasso_version.h"
 
 #ifdef INCLUDE_LASSO_HOST       // refer to "lasso_host_config.h"
@@ -186,110 +187,6 @@
 #define LASSO_DATACELL_TYPE_BYTEWIDTH_MASK  (LASSO_DATACELL_TYPE_MASK | \
                                              LASSO_DATACELL_BYTEWIDTH_MASK)
 
-// General availability checks
-#ifndef LASSO_HOST_COMMAND_ENCODING
-    #define LASSO_HOST_COMMAND_ENCODING LASSO_ENCODING_RN
-#endif
-
-#ifndef LASSO_HOST_STROBE_ENCODING
-    #define LASSO_HOST_STROBE_ENCODING LASSO_ENCODING_NONE
-#endif
-
-#if (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_NONE)
-    #if (LASSO_HOST_NOTIFICATIONS == 1)
-        #error Notifications can only be used in full ESCS/COBS encoding mode
-    #endif
-#endif
-
-// Lasso host memory alignment policy
-#ifndef LASSO_MEMORY_ALIGN
-    #define LASSO_MEMORY_ALIGN          (4)         //<! Byte boundary alignment
-#endif
-
-// Lasso host incoming (command) and outgoing (response) buffer sizes
-#ifndef LASSO_HOST_COMMAND_BUFFER_SIZE
-    #define LASSO_HOST_COMMAND_BUFFER_SIZE      (64)
-#else
-    #if (LASSO_HOST_COMMAND_BUFFER_SIZE < 16)
-        #error Minimum for LASSO_HOST_COMMAND_BUFFER_SIZE is 16
-    #endif
-    #if (LASSO_HOST_COMMAND_BUFFER_SIZE > 64)
-        #error Maximum for LASSO_HOST_COMMAND_BUFFER_SIZE is 64
-    #endif
-#endif
-
-#ifndef LASSO_HOST_RESPONSE_BUFFER_SIZE
-    #define LASSO_HOST_RESPONSE_BUFFER_SIZE     (96)
-#else
-    #if (LASSO_HOST_RESPONSE_BUFFER_SIZE < 32)
-        #error Minimum for LASSO_HOST_RESPONSE_BUFFER_SIZE is 32
-    #endif
-    #if (LASSO_HOST_RESPONSE_BUFFER_SIZE > 256)
-        #error Maximum for LASSO_HOST_RESPONSE_BUFFER_SIZE is 256
-    #endif
-#endif
-
-// Lasso host outgoing (notification) buffer size (default, unlimited)
-#if (LASSO_HOST_NOTIFICATIONS == 1)
-    #ifndef LASSO_HOST_NOTIFICATION_BUFFER_SIZE
-        #define LASSO_HOST_NOTIFICATION_BUFFER_SIZE     (256)
-    #endif
-#endif
-
-// Lasso host incoming (command) and outgoing (strobe, response) timings
-#ifndef LASSO_HOST_COMMAND_TIMEOUT_TICKS
-    #define LASSO_HOST_COMMAND_TIMEOUT_TICKS    (5)
-#else
-    #if (LASSO_HOST_COMMAND_TIMEOUT_TICKS < 1)
-        #error Minimum for LASSO_HOST_COMMAND_TIMEOUT_TICKS is 1
-    #endif
-#endif
-
-#if (LASSO_HOST_STROBE_ENCODING != LASSO_ENCODING_NONE)
-    #if (LASSO_HOST_STROBE_ENCODING != LASSO_HOST_COMMAND_ENCODING)
-        #error LASSO_HOST_STROBE_ENCODING must match LASSO_HOST_COMMAND_ENCODING if not NONE
-    #endif
-#endif
-
-#if (LASSO_HOST_STROBE_DYNAMICS == LASSO_STROBE_DYNAMIC)
-    #if (LASSO_HOST_STROBE_ENCODING == LASSO_ENCODING_NONE)
-        #error LASSO_HOST_STROBE_ENCODING must not be NONE when selecting dynamic strobing
-    #endif
-#endif
-
-#ifndef LASSO_HOST_STROBE_PERIOD_MIN_TICKS
-    #define LASSO_HOST_STROBE_PERIOD_MIN_TICKS  (10)
-#else
-    #if (LASSO_HOST_STROBE_PERIOD_MIN_TICKS < 1)
-        #error Minimum for LASSO_HOST_STROBE_PERIOD_MIN_TICKS is 1
-    #endif
-#endif
-
-#ifndef LASSO_HOST_STROBE_PERIOD_MAX_TICKS
-    #define LASSO_HOST_STROBE_PERIOD_MAX_TICKS  (65535)
-#else
-    #if (LASSO_HOST_STROBE_PERIOD_MAX_TICKS > 65535)
-        #error Maximum for LASSO_HOST_STROBE_PERIOD_MIN_TICKS is 65535
-    #endif
-#endif
-
-#ifndef LASSO_HOST_STROBE_PERIOD_TICKS
-    #define LASSO_HOST_STROBE_PERIOD_TICKS  LASSO_HOST_STROBE_PERIOD_MIN_TICKS
-#else
-    #if (LASSO_HOST_STROBE_PERIOD_TICKS < LASSO_HOST_STROBE_PERIOD_MIN_TICKS)
-        #error LASSO_HOST_STROBE_PERIOD_TICKS must be >= LASSO_HOST_STROBE_PERIOD_MIN_TICKS
-    #elif (LASSO_HOST_STROBE_PERIOD_TICKS > LASSO_HOST_STROBE_PERIOD_MAX_TICKS)
-        #error LASSO_HOST_STROBE_PERIOD_TICKS must be <= LASSO_HOST_STROBE_PERIOD_MAX_TICKS
-    #endif
-#endif
-
-#ifndef LASSO_HOST_RESPONSE_LATENCY_TICKS
-    #define LASSO_HOST_RESPONSE_LATENCY_TICKS  (1)
-#else
-    #if (LASSO_HOST_RESPONSE_LATENCY_TICKS < 1)
-        #error Minimum for LASSO_HOST_RESPONSE_LATENCY_TICKS is 1
-    #endif
-#endif
 
 // convenience function to transform x into string value
 #define _TOSTR(x) #x
@@ -320,24 +217,15 @@
                                               /LASSO_HOST_BAUDRATE/LASSO_HOST_TICK_PERIOD_MS + \
                                                LASSO_HOST_RESPONSE_LATENCY_TICKS + 2)
 
-#if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_RN)
-    #if (LASSO_HOST_COMMAND_CRC_ENABLE != 0)
-        #error In RN command/response encoding, LASSO_HOST_COMMAND_CRC_ENABLE must be 0
-    #endif
-
-    #if (LASSO_HOST_STROBE_ENCODING != LASSO_ENCODING_NONE)
-        #error In RN command/response encoding, LASSO_HOST_STROBE_ENCODING must be LASSO_ENCODING_NONE
-    #endif
-
-    #if (LASSO_HOST_PROCESSING_MODE != LASSO_ASCII_MODE)
-        #error In RN command/response encoding, LASSO_HOST_PROCESSING_MODE must be LASSO_ASCII_MODE
-    #endif
-#endif
-
 
 //--------------------//
 // Private Prototypes //
 //--------------------//
+
+static int32_t lasso_comDefaultCallback (
+    uint8_t* src,                           //!< buffer start pointer
+    uint32_t cnt                            //!< number of Bytes to send
+);
 
 #if (LASSO_HOST_COMMAND_CRC_ENABLE == 1) || (LASSO_HOST_STROBE_CRC_ENABLE == 1)
 static uint32_t lasso_crcDefaultCallback (
@@ -404,9 +292,9 @@ static bool      lasso_strobing = false;    //!< global strobe enable flag
 static bool      lasso_advertise = true;    //!< advertise unless client connected
 
 // user-supplied callbacks
-static lasso_comCallback comCallback = NULL;    //!< trigger communication
+static lasso_comCallback comCallback = &lasso_comDefaultCallback;   //!< trigger communication
 #if (LASSO_HOST_COMMAND_CRC_ENABLE == 1) || (LASSO_HOST_STROBE_CRC_ENABLE == 1)
-    static lasso_crcCallback crcCallback = lasso_crcDefaultCallback;    //!< CRC
+    static lasso_crcCallback crcCallback = &lasso_crcDefaultCallback;    //!< CRC
 #endif
 static lasso_actCallback actCallback = NULL;    //!< strobe de-/activation
 static lasso_perCallback perCallback = NULL;    //!< strobe period changed
@@ -496,12 +384,27 @@ static struct __attribute__((packed)) {
     static uint32_t lasso_timestamp = 0;
 #endif
 
+
 //-------------------//
 // Private functions //
 //-------------------//
 
 /*!
- *  \brief  Default CRC caller function.
+ *  \brief  Empty COM callback.
+ *
+ *          Does nothing.
+ *
+ *  \return "successful" code
+ */
+static int32_t lasso_comDefaultCallback (
+    uint8_t* src,                           //!< buffer start pointer
+    uint32_t cnt                            //!< number of Bytes to send
+) {
+    return 0;
+}
+
+/*!
+ *  \brief  Default CRC callback.
  *
  *          In case user forgets to register own CRC callback, this function
  *          provides a sample CRC calculation based on 8-bit XORing.
@@ -2068,7 +1971,7 @@ static bool lasso_hostTransmitDataFrame (
             }
 
             // for errors other than EBUSY, no attempt to retransmit is made!
-            if (comCallback(frame, num + 3) != EBUSY) { // "num" does not include COBS header nor trailing COBS delimiter
+            if (comCallback(frame, num + 3) != EBUSY) { // "num" must not include COBS header nor trailing COBS delimiter
                 ptr->frame      += num;
                 ptr->Byte_count -= num;
                 return true;
@@ -2100,7 +2003,9 @@ static bool lasso_hostTransmitDataFrame (
         // for errors other than EBUSY, no attempt to retransmit is made!
         if (comCallback(frame, num) != EBUSY) {
             ptr->frame      += num;
-            ptr->Byte_count -= num;
+            ptr->Byte_count -= num; 
+            // todo: as soon as Byte_count is 0, a new message may be prepared,
+            // which may override the message being transmitted right now ...
             return true;
         }
     }
@@ -2425,10 +2330,10 @@ int32_t lasso_hostRegisterMEM (void) {
 #elif (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
     response.Bytes_max += 3;    // start and end delimiter + COBS code
 #if (LASSO_HOST_NOTIFICATIONS == 1)
-    notifications.Bytes_max += 3;
+    notification.Bytes_max += 3;
 #endif
 
-// RN encoding always requires constant overhead (no notifications)
+// RN encoding always requires constant overhead (no notifications possible)
 #elif (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_RN)
     response.Bytes_max += 2;    // two end delimiters
 
@@ -2606,57 +2511,178 @@ int32_t lasso_hostReceiveByte (
 }
 
 
-/*!
- *  \brief  Send a notification to Lasso client.
- *
- *  Note 1: Notification are only possible in full ESCS/COBS encoding modes.
- *  Note 2: Notifications do not come with a CRC.
- *
- *  \return Error code
- */
 #if (LASSO_HOST_NOTIFICATIONS == 1)
-int32_t lasso_hostSendNotification (
-    const char* msg             //!< notification string
+#if (LASSO_HOST_NOTIFICATION_USE_PRINTF == 1)   
+/*!
+ *  \brief  Add _write() function for printf() functionality (GCC compiler).
+ *
+ *  General notes on notifications:
+ *  Note 1: Notifications are not possible when advertising.
+ *  Note 2: Notifications are only possible in full COBS/ESCS modes.
+ *  Note 3: Notifications do not come with a CRC.
+ *  Note 4: Notifications longer than buffer size are truncated.
+ *  Note 5: Each notification must be terminated with the '\n' code to appear
+ *          as a new line in Lasso client. It is possible to accumulate
+ *          notification text with several calls to printf() before terminating
+ *          the message. However, max buffer truncation is always applied.
+ *
+ *  Notes on printf() and _write():
+ *  Note 1: printf() outputs to an intermediate buffer if text is not terminated
+ *          by '\n' (the newline character acts like a flush)
+ *
+ *  \return Number of Bytes written to notification buffer
+ */
+int _write(
+    int file,
+    char *ptr,
+    int len
 ) {
-    uint8_t* notificationBuffer = notification.buffer;
-    size_t len = strlen(msg);
+    char c = 0;
+    static uint8_t* notificationBuffer = NULL;      
+
+    // if advertising, then completely reset notification buffer
+    if (lasso_advertise) {
+        notification.Byte_count = 0;
+        notificationBuffer = NULL;
+        return 0;
+    }
     
-    if (len < LASSO_HOST_NOTIFICATION_BUFFER_SIZE) {
+    // still transmitting?
+    if (notification.Byte_count > 0) {
+        return 0;
+    }    
+  
+    if (notificationBuffer == NULL) {
+        notificationBuffer = notification.buffer;
+        
     #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
         *notificationBuffer = 0xFF; // indicate that buffer has not been COBS en-
                                     // coded yet, COBS itself places a 0x00 here
         notificationBuffer += 2;    // access space behind COBS header
-    #endif
-
+    #endif 
+    
     #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
         *notificationBuffer = 0;    // this will launch the ESCS encoder
         notificationBuffer += notification.Bytes_max;   // access 2nd half of buffer
-    #endif
-        
+    #endif    
+    
         // install default notification opcode
-        *notificationBuffer++ = LASSO_HOST_SEND_NOTIFICATION;
-
-        strcpy(&notificationBuffer[1], msg);    // copy msg to local buffer
-        notificationBuffer += len;
-        notification.Bytes_total = notificationBuffer - notification.buffer;
-        
-    // correct transmission length for COBS
-    #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
-        notification.Bytes_total -= 2;  // COBS header does not count as payload Bytes
-    #endif
-
-    // correct transmission length for ESCS
-    #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
-        notification.Bytes_total -= notification.Bytes_max;   // correct initial offset
-    #endif        
-
-        notification.frame = notification.buffer;   // load buffer start
-        notification.Byte_count = notification.Bytes_total; // trigger transmission
-        
-        return 0;
+        *notificationBuffer++ = LASSO_HOST_SEND_NOTIFICATION;    
+        notification.Bytes_total = 1;
     }
     
-    return ENOSPC;
+    file = len;    // abuse "file" variable as copy of len
+    
+    while (len--) {
+        c = *ptr++;        
+        if (c == '\n') break;
+        *notificationBuffer++ = (uint8_t)c;
+        
+        // truncate if required (will create new line in Lasso client)
+        if (++notification.Bytes_total == LASSO_HOST_NOTIFICATION_BUFFER_SIZE) {
+            c = '\n';
+            break;
+        }        
+    }      
+
+    if (c == '\n') {
+        notification.frame = notification.buffer;   // load buffer start
+        notification.Byte_count = notification.Bytes_total; // trigger transmission
+        notificationBuffer = NULL; // reset buffer for next line    
+        
+    #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
+        notification.COBS_backup = notification.buffer[2];
+    #endif    
+    }
+    
+    return (file - len);
+}    
+#endif
+    
+
+/*!
+ *  \brief  Send a notification to Lasso client.
+ *
+ *  Note 1: Notifications are not possible when advertising.
+ *  Note 2: Notifications are only possible in full COBS/ESCS modes.
+ *  Note 3: Notifications do not come with a CRC.
+ *  Note 4: Notifications longer than buffer size are truncated.
+ *  Note 5: Each notification will appear on a new line in Lasso client.
+ *          Sending '\r\n' line termination codes are unnecessary.
+ *
+ *  \return Error code
+ */
+int32_t lasso_hostSendNotification (
+    const char* msg             //!< notification string
+) {
+    // advertising?
+    if (lasso_advertise) {
+        return EBUSY;
+    }
+    
+    // still transmitting?
+    if (notification.Byte_count > 0) {
+        return EBUSY;
+    }
+
+    uint8_t* notificationBuffer = notification.buffer;
+    size_t len = strlen(msg);
+    
+    if (len >= LASSO_HOST_NOTIFICATION_BUFFER_SIZE) {
+        len = LASSO_HOST_NOTIFICATION_BUFFER_SIZE - 1;  // discount opcode
+    }
+    
+#if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
+    *notificationBuffer = 0xFF; // indicate that buffer has not been COBS en-
+                                // coded yet, COBS itself places a 0x00 here
+    notificationBuffer += 2;    // access space behind COBS header
+#endif
+
+#if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
+    *notificationBuffer = 0;    // this will launch the ESCS encoder
+    notificationBuffer += notification.Bytes_max;   // access 2nd half of buffer
+#endif
+        
+    // install default notification opcode
+    *notificationBuffer++ = LASSO_HOST_SEND_NOTIFICATION;
+
+    // copy excluding \0 string terminator
+    memcpy((void*)notificationBuffer, (const void*)msg, len);        
+    notificationBuffer += len;
+    
+    notification.Bytes_total = notificationBuffer - notification.buffer;
+    
+// correct transmission length for COBS
+#if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
+    notification.COBS_backup = notification.buffer[2];
+    notification.Bytes_total -= 2;  // COBS header does not count as payload Bytes    
+#endif
+
+// correct transmission length for ESCS
+#if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
+    notification.Bytes_total -= notification.Bytes_max;   // correct initial offset
+#endif        
+
+    notification.frame = notification.buffer;   // load buffer start
+    notification.Byte_count = notification.Bytes_total; // trigger transmission
+    
+    return 0;    
+}
+#else
+#if (LASSO_HOST_NOTIFICATION_USE_PRINTF == 1)      
+int _write(
+    int file,
+    char *ptr,
+    int len
+) {
+    return 0;
+}
+#endif
+    
+int32_t lasso_hostSendNotification (
+    const char* msg             //!< notification string
+) {
+    return 0;
 }
 #endif
 
@@ -2817,17 +2843,17 @@ void lasso_hostHandleCOM (void)
     // 1) responses frames are sent only if no strobe is being sent
     // 2) the first free slot after a strobe is assigned to a response frame
     // 3) notifications are only sent if not busy with strobe or response frames
-    if (strobe.Byte_count == 0) {
-        if (response.Byte_count == 0) {
-            lasso_hostTransmitDataFrame(&notification);
-        }
-        else {
-            lasso_hostTransmitDataFrame(&response);
-        }
-    }
-    else {
+    if (strobe.Byte_count > 0) {
         lasso_hostTransmitDataFrame(&strobe);
     }
+    else if (response.Byte_count > 0) {
+        lasso_hostTransmitDataFrame(&response);        
+    }        
+#if (LASSO_HOST_NOTIFICATIONS == 1)        
+    else if (notification.Byte_count > 0) {
+        lasso_hostTransmitDataFrame(&notification);
+    }
+#endif        
 
 #if (LASSO_HOST_TIMESTAMP == 1)
     lasso_timestamp++;
