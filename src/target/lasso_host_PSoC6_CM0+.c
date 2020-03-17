@@ -19,7 +19,11 @@
 
 #include <project.h>
 #include <stdio.h>      // for using printf(), if desired
+#include <stdbool.h>    
     
+#if (LASSO_HOST_NOTIFICATION_USE_PRINTF == 1)    
+extern volatile bool notification_ready;
+#endif
     
 //--------------------------//
 // Module private functions //
@@ -38,6 +42,14 @@ void LASSO_ISR_handler(void) {
 #endif    
     }
 }    
+    
+void LASSO_UART_ISR_handler(void) {
+#if (LASSO_HOST_NOTIFICATION_USE_PRINTF == 1)    
+    notification_ready = lasso_hostSignalFinishedCOM();
+#else
+    lasso_hostSignalFinishedCOM();    
+#endif
+}
     
     
 //-------------------------//
@@ -77,6 +89,13 @@ int32_t lasso_comSetup_PSoC6(void)
     }
     NVIC_ClearPendingIRQ(LASSO_ISR_cfg.intrSrc);
     NVIC_EnableIRQ(LASSO_ISR_cfg.intrSrc);     
+    
+    // start ISR for DMA transmission end
+    if (CY_SYSINT_SUCCESS != Cy_SysInt_Init(&LASSO_UART_ISR_cfg, &LASSO_UART_ISR_handler)) {
+        while(1); // Handle possible errors
+    }
+    NVIC_ClearPendingIRQ(LASSO_UART_ISR_cfg.intrSrc);
+    NVIC_EnableIRQ(LASSO_UART_ISR_cfg.intrSrc);    
     
     return 0;
 }

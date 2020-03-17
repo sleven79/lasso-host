@@ -284,18 +284,6 @@ int32_t lasso_hostReceiveByte (
 #if (LASSO_HOST_NOTIFICATIONS == 1)
 #if (LASSO_HOST_NOTIFICATION_USE_PRINTF == 1)
 /*!
- *  \brief  _write() function for printf() functionality (GCC compiler).
- *
- *  \return Number of Bytes written to notification buffer
- */    
-int _write(
-    int file,
-    char *ptr,
-    int len
-);
-#endif
-
-/*!
  *  \brief  Send a notification (error/debug msg) to Lasso client.
  *
  *  \return Error code
@@ -303,6 +291,25 @@ int _write(
 int32_t lasso_hostSendNotification (
     const char* msg             //!< notification string
 );
+#endif
+
+/*!
+*  \brief  Signal to Lasso host that serial COM has finished transmitting.
+*    
+*  Note: to be called by user code after transmission of each frame.
+*
+*  \return True if next notification can be sent. False otherwise.
+*/
+bool lasso_hostSignalFinishedCOM(void);  
+#else
+/*!
+*  \brief  Signal to Lasso host that serial COM has finished transmitting.
+*    
+*  Note: to be called by user code after transmission of each frame.
+*
+*  \return Void
+*/
+void lasso_hostSignalFinishedCOM(void);  
 #endif
 
 /*!

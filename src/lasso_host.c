@@ -263,8 +263,7 @@ typedef struct DATAFRAME
 {
     uint16_t countdown;         //!< period countdown
     uint8_t  COBS_backup;       //!< COBS backup Byte (only for COBS encoding)
-    uint8_t  valid;             //!< strobe: transmission within one lasso cycle
-                                //!< response frame: valid request received
+    bool     permission;        //!< buffer write access permission
     uint8_t* buffer;            //!< buffer pointer
     uint8_t* frame;             //!< frame pointer (progressive parts in buffer)
     uint32_t Byte_count;        //!< number of Bytes remaining to be transmitted
@@ -287,6 +286,7 @@ static dataCell* dataCellLast = NULL;       //!< pointer to last DC structure
 static uint8_t*  receiveBuffer = NULL;      //!< buffer for incoming commands
 static uint8_t   receiveBufferIndex = 0;    //!< write index in receiveBuffer
 static uint32_t  receiveTimeout = 0;        //!< receive timeout counter
+static uint8_t   receiveValid = 0;          //!< number of valid command Bytes
 
 static bool      lasso_strobing = false;    //!< global strobe enable flag
 static bool      lasso_advertise = true;    //!< advertise unless client connected
@@ -305,14 +305,15 @@ static dataFrame strobe = \
     { LASSO_HOST_STROBE_PERIOD_TICKS, 0, true, NULL, NULL, 0, 0, 0};
 
 static dataFrame response = \
-    { LASSO_HOST_ROUNDTRIP_LATENCY_TICKS, 0, false, NULL, NULL, 0, \
+    { LASSO_HOST_ROUNDTRIP_LATENCY_TICKS, 0, true, NULL, NULL, 0, \
         LASSO_HOST_RESPONSE_BUFFER_SIZE, 0};
 
 #if (LASSO_HOST_NOTIFICATIONS == 1)
 static dataFrame notification = \
-    { 0, 0, false, NULL, NULL, 0, \
-        LASSO_HOST_NOTIFICATION_BUFFER_SIZE, 0};
+    { 0, 0, true, NULL, NULL, 0, LASSO_HOST_NOTIFICATION_BUFFER_SIZE, 0};
 #endif
+
+static dataFrame* lastFrame = NULL;
         
 static uint16_t lasso_strobe_period = LASSO_HOST_STROBE_PERIOD_TICKS;
 //!< at each expiration, strobe period is reloaded from here
@@ -1302,11 +1303,11 @@ static void lasso_hostInterpreteCommand (
                                 // ... and later number of opcode parameters
 #elif (LASSO_HOST_PROCESSING_MODE == LASSO_ASCII_MODE)
     uint8_t* receiverBuffer = receiveBuffer;    // make local copy that can be modified
-    receiverBuffer[response.valid] = 0;         // and terminate correctly
+    receiverBuffer[receiveValid] = 0;           // and terminate correctly
 #endif
 
     if (cmdCallback) {
-        msg_err = cmdCallback(receiveBuffer, response.valid);
+        msg_err = cmdCallback(receiveBuffer, receiveValid);
     }
 
     response.Bytes_total = 0;
@@ -1330,8 +1331,8 @@ static void lasso_hostInterpreteCommand (
     // handle message
 #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
     if (msg_err == 0) {
-        // setup msgpack reader on "receiveBuffer" with max length "response.valid"
-        PackReaderSetBuffer(&frame_reader, receiveBuffer, response.valid);
+        // setup msgpack reader on "receiveBuffer" with max length "receiveValid"
+        PackReaderSetBuffer(&frame_reader, receiveBuffer, receiveValid);
         PackReaderOpen(&frame_reader, E_PackTypeArray, &nargs);
 
         if (nargs > 0) {    // receive at least expected opcode
@@ -1941,7 +1942,7 @@ static bool lasso_hostTransmitDataFrame (
     #endif
 
     if (num > 0) {
-
+        
     #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
     #if (LASSO_HOST_COMMAND_ENCODING != LASSO_HOST_STROBE_ENCODING)
         if (ptr != &strobe) {
@@ -1984,7 +1985,7 @@ static bool lasso_hostTransmitDataFrame (
     #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
     #if (LASSO_HOST_COMMAND_ENCODING != LASSO_HOST_STROBE_ENCODING)
         if (ptr != &strobe) {
-    #else
+    #else      
         if (!lasso_advertise) {
     #endif
             // ESCS encode if not already done (=COM busy in previous cycle)
@@ -2004,8 +2005,24 @@ static bool lasso_hostTransmitDataFrame (
         if (comCallback(frame, num) != EBUSY) {
             ptr->frame      += num;
             ptr->Byte_count -= num; 
-            // todo: as soon as Byte_count is 0, a new message may be prepared,
-            // which may override the message being transmitted right now ...
+            lastFrame        = ptr; // for permission re-enable in callback func
+        
+            // ----------------------
+            // A shortcoming of Lasso
+            // ----------------------
+            // The full bandwidth of the serial line cannot be used so far.
+            // Lasso host uses a single buffer to store strobe and notification
+            // frames. While transmitting on the serial line, write access to
+            // strobe and notification buffers is disabled.
+            // Therefore, Lasso host needs a small window in between two trans-
+            // missions to update each buffer if required.
+            // A callback function is provided that must be called from user
+            // code in order to re-enable write access to each buffer.
+            // A future update of Lasso host may eliminate the bandwidth issue
+            // by implementing a double-buffer strategy for each message type.
+            // However, this obviously comes with the cost of higher heap usage
+            // and higher computation needs from the CPU.
+            
             return true;
         }
     }
@@ -2448,7 +2465,7 @@ int32_t lasso_hostReceiveByte (
                 // 2) CRC check
                 //    -> not used for RN encoding
                 */
-                response.valid = receiveBufferIndex;
+                receiveValid = receiveBufferIndex;
                 lasso_clearReceiveTimeout();
                 return 0;
             }
@@ -2458,7 +2475,7 @@ int32_t lasso_hostReceiveByte (
             }
         }
 
-        if (response.valid == 0) {   // only one command to be handled at a time
+        if (receiveValid == 0) {   // only one command to be handled at a time
             receiveBuffer[receiveBufferIndex++] = b;
             receiveTimeout = LASSO_HOST_COMMAND_TIMEOUT_TICKS;
         }
@@ -2470,24 +2487,24 @@ int32_t lasso_hostReceiveByte (
     else {
 
 #elif (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
-    if (response.valid == 0) {
-        response.valid = COBS_decode_inline(b, receiveBuffer, LASSO_HOST_COMMAND_BUFFER_SIZE);
+    if (receiveValid == 0) {
+        receiveValid = COBS_decode_inline(b, receiveBuffer, LASSO_HOST_COMMAND_BUFFER_SIZE);
     }
     else {
         return ENOSPC;
     }
 
-    if (response.valid > LASSO_HOST_COMMAND_BUFFER_SIZE) {  // this is an error condition of COBS_decode_inline
+    if (receiveValid > LASSO_HOST_COMMAND_BUFFER_SIZE) {  // this is an error condition of COBS_decode_inline
 
 #else // ESCS
-    if (response.valid == 0) {
-        response.valid = ESCS_decode_inline(b, receiveBuffer, LASSO_HOST_COMMAND_BUFFER_SIZE);
+    if (receiveValid == 0) {
+        receiveValid = ESCS_decode_inline(b, receiveBuffer, LASSO_HOST_COMMAND_BUFFER_SIZE);
     }
     else {
         return ENOSPC;
     }
 
-    if (response.valid > LASSO_HOST_COMMAND_BUFFER_SIZE) {  // this is an error condition of ESCS_decode_inline
+    if (receiveValid > LASSO_HOST_COMMAND_BUFFER_SIZE) {  // this is an error condition of ESCS_decode_inline
 
 #endif
 
@@ -2503,15 +2520,48 @@ int32_t lasso_hostReceiveByte (
         response.COBS_backup = response.buffer[2];
     #endif
 
-        response.valid = 0;
+        receiveValid = 0;
         return EOVERFLOW;
     }
 
     return 0;
 }
+    
+
+/*!
+ *  \brief  Signal to Lasso host that serial COM has finished transmitting.
+ *    
+ *   Notes: to be called by user code after transmission of each frame.
+ *          When notifications are enabled, returns True if ready for next.
+ *
+ *  \return None or True/False
+ */
+#if (LASSO_HOST_NOTIFICATION_USE_PRINTF == 1)
+bool lasso_hostSignalFinishedCOM(void) {    
+#else
+void lasso_hostSignalFinishedCOM(void) {
+#endif
+    // re-enable frame buffer write access for strobe and notification
+    if (lastFrame) {
+        if (lastFrame->Byte_count == 0) {
+            lastFrame->permission = true;
+
+#if (LASSO_HOST_NOTIFICATION_USE_PRINTF == 1)        
+            if (lastFrame == &notification) {
+                return true;
+            }                        
+        }        
+    }
+
+    return false;
+#else
+        }
+    }        
+#endif
+}
 
 
-#if (LASSO_HOST_NOTIFICATIONS == 1)
+#if (LASSO_HOST_NOTIFICATIONS == 1)   
 #if (LASSO_HOST_NOTIFICATION_USE_PRINTF == 1)   
 /*!
  *  \brief  Add _write() function for printf() functionality (GCC compiler).
@@ -2534,7 +2584,7 @@ int32_t lasso_hostReceiveByte (
  */
 int _write(
     int file,
-    char *ptr,
+    char* ptr,
     int len
 ) {
     char c = 0;
@@ -2548,7 +2598,7 @@ int _write(
     }
     
     // still transmitting?
-    if (notification.Byte_count > 0) {
+    if (!notification.permission) {
         return 0;
     }    
   
@@ -2593,6 +2643,8 @@ int _write(
     #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
         notification.COBS_backup = notification.buffer[2];
     #endif    
+    
+        notification.permission = false;
     }
     
     return (file - len);
@@ -2614,14 +2666,14 @@ int _write(
  */
 int32_t lasso_hostSendNotification (
     const char* msg             //!< notification string
-) {
+) { 
     // advertising?
     if (lasso_advertise) {
         return EBUSY;
     }
     
     // still transmitting?
-    if (notification.Byte_count > 0) {
+    if (!notification.permission) {
         return EBUSY;
     }
 
@@ -2639,8 +2691,8 @@ int32_t lasso_hostSendNotification (
 #endif
 
 #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
-    *notificationBuffer = 0;    // this will launch the ESCS encoder
-    notificationBuffer += notification.Bytes_max;   // access 2nd half of buffer
+    *notificationBuffer = 0;             // this will launch the ESCS encoder
+    notificationBuffer += notification.Bytes_max;// access 2nd half of buffer
 #endif
         
     // install default notification opcode
@@ -2660,12 +2712,14 @@ int32_t lasso_hostSendNotification (
 
 // correct transmission length for ESCS
 #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
-    notification.Bytes_total -= notification.Bytes_max;   // correct initial offset
+    notification.Bytes_total -= notification.Bytes_max; // correct initial offset
 #endif        
 
-    notification.frame = notification.buffer;   // load buffer start
-    notification.Byte_count = notification.Bytes_total; // trigger transmission
-    
+    notification.frame = notification.buffer;           // load buffer start
+    notification.Byte_count = notification.Bytes_total; // trigger transmission    
+
+    notification.permission = false;
+
     return 0;    
 }
 #else
@@ -2782,13 +2836,7 @@ void lasso_hostHandleCOM (void)
         if (strobe.countdown == 0) {
             strobe.countdown = lasso_strobe_period;
 
-            if (strobe.Byte_count > 0) {
-                // still tranmitting? -> signal overdrive
-                lasso_overdrive = 1;
-
-                strobe.valid = false;
-            }
-            else {
+            if (strobe.permission) {
                 lasso_hostSampleDataCells();
 
                 strobe.frame = strobe.buffer;           // load buffer start
@@ -2798,6 +2846,12 @@ void lasso_hostHandleCOM (void)
                 strobe.COBS_backup = strobe.buffer[2];  // save Byte crushed by
                                                         // future COBS encoding
             #endif
+            
+                strobe.permission = false;            
+            }
+            else {                
+                // still tranmitting? -> signal overdrive
+                lasso_overdrive = 1;
             }
         }
     }
@@ -2806,10 +2860,10 @@ void lasso_hostHandleCOM (void)
     if (response.countdown == 0) {
         response.countdown = (uint16_t)(LASSO_HOST_RESPONSE_LATENCY_TICKS);
 
-        if (response.Byte_count == 0) {
-            if (response.valid > 0) {
+        if (response.permission) {
+            if (receiveValid > 0) {
                 #if (LASSO_HOST_COMMAND_CRC_ENABLE == 1)
-                if (crcCallback(receiveBuffer, response.valid) == 0) {
+                if (crcCallback(receiveBuffer, receiveValid) == 0) {
                 #else
                 {
                 #endif
@@ -2835,8 +2889,10 @@ void lasso_hostHandleCOM (void)
                 }
                 #endif
 
-                response.valid = 0;
+                receiveValid = 0;
             }
+                
+            response.permission = false;
         }
     }
 
