@@ -1273,9 +1273,9 @@ static int32_t lasso_hostGetCycleMargin (void) {
 /*!
  *  \brief  Read in command sent from client.
  *
- *  \return Void
+ *  \return True if response must be sent to Lasso Client. False otherwise
  */
-static void lasso_hostInterpreteCommand (
+static bool lasso_hostInterpreteCommand (
     int32_t rx_err              //!< receive buffer overflow? incomplete command?
 ) {
     int32_t  msg_err = 0;       // error during message processing
@@ -1397,7 +1397,7 @@ static void lasso_hostInterpreteCommand (
         // - for SET command opcodes (>= 'A'), each command deals with the issue differently
         #if (LASSO_HOST_STROBE_ENCODING < LASSO_ENCODING_COBS)
             if ((lasso_strobing) && (opcode >= 'a')) {
-                return;
+                return false;
             }
         #endif
 
@@ -1623,7 +1623,7 @@ static void lasso_hostInterpreteCommand (
                     }
 
                     // since advertising and strobing is mutually exclusive, strobing is off now
-                    return;
+                    return false;
                 }
 
                 case LASSO_HOST_SET_STROBE_PERIOD : {
@@ -1663,12 +1663,12 @@ static void lasso_hostInterpreteCommand (
                     }
 
                     if (lasso_advertise) {
-                        return;
+                        return false;
                     }
 
                 #if (LASSO_HOST_STROBE_ENCODING < LASSO_ENCODING_COBS)  // no response & strobe interleaving possible
                     if (lasso_strobing) {
-                        return;
+                        return false;
                     }
                 #endif
 
@@ -1712,11 +1712,11 @@ static void lasso_hostInterpreteCommand (
                     if (lasso_advertise) {
                         strobe.Byte_count = 0;      // cancel remaining frames
                         lasso_advertise = false;
-                        return;                     // no response sent
+                        return false;               // no response sent
                     }
 
                 #if (LASSO_HOST_STROBE_ENCODING < LASSO_ENCODING_COBS)  // no response & strobe interleaving possible
-                    return;
+                    return false;
                 #else
                     break;
                 #endif
@@ -1727,7 +1727,7 @@ static void lasso_hostInterpreteCommand (
                     // strobing on : not possible -> this command requires strobing to be off since it changes the strobe length
                     // strobing off: acknowledgement is sent (tiny reply)
                     if (lasso_strobing) {
-                        return;
+                        return false;
                     }
 
                 #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
@@ -1780,7 +1780,7 @@ static void lasso_hostInterpreteCommand (
                     }
 
                     if (lasso_advertise) {
-                        return;
+                        return false;
                     }
 
                     break;
@@ -1824,12 +1824,12 @@ static void lasso_hostInterpreteCommand (
                     }
 
                     if (lasso_advertise) {
-                        return;
+                        return false;
                     }
 
                 #if (LASSO_HOST_STROBE_ENCODING < LASSO_ENCODING_COBS)  // no response & strobe interleaving possible
                     if (lasso_strobing) {
-                        return;
+                        return false;
                     }
                 #endif
 
@@ -1911,6 +1911,8 @@ static void lasso_hostInterpreteCommand (
 #endif
 
 #endif
+
+    return true;
 }
 
 
@@ -2205,7 +2207,7 @@ int32_t lasso_hostRegisterDataCell (
     ctrl ^= LASSO_DATACELL_NOSTROBE;
 
 #if (LASSO_HOST_STROBE_EXTERNAL_SOURCE != 0)
-    type |= LASSO_DATACELL_PERMANENT;
+    ctrl |= LASSO_DATACELL_PERMANENT;
 #endif
 
     if (ctrl & LASSO_DATACELL_PERMANENT) {
@@ -2511,16 +2513,19 @@ int32_t lasso_hostReceiveByte (
         lasso_clearReceiveTimeout();
 
         // notify client of receive buffer overflow
-        lasso_hostInterpreteCommand(EOVERFLOW);
+        if (lasso_hostInterpreteCommand(EOVERFLOW)) {
 
-        response.frame = response.buffer;   // load buffer start
-        response.Byte_count = response.Bytes_total; // trigger transmission
+            response.frame = response.buffer;           // load buffer start
+            response.Byte_count = response.Bytes_total; // trigger transmission
 
-    #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
-        response.COBS_backup = response.buffer[2];
-    #endif
+        #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
+            response.COBS_backup = response.buffer[2];
+        #endif
 
-        receiveValid = 0;
+            receiveValid = 0;
+            response.permission = false;                // lock response frame buffer
+        }
+        
         return EOVERFLOW;
     }
 
@@ -2644,7 +2649,7 @@ int _write(
         notification.COBS_backup = notification.buffer[2];
     #endif    
     
-        notification.permission = false;
+        notification.permission = false;            // lock notification frame buffer
     }
     
     return (file - len);
@@ -2718,7 +2723,7 @@ int32_t lasso_hostSendNotification (
     notification.frame = notification.buffer;           // load buffer start
     notification.Byte_count = notification.Bytes_total; // trigger transmission    
 
-    notification.permission = false;
+    notification.permission = false;                    // lock notification frame buffer
 
     return 0;    
 }
@@ -2847,7 +2852,7 @@ void lasso_hostHandleCOM (void)
                                                         // future COBS encoding
             #endif
             
-                strobe.permission = false;            
+                strobe.permission = false;              // lock strobe frame buffer  
             }
             else {                
                 // still tranmitting? -> signal overdrive
@@ -2873,14 +2878,17 @@ void lasso_hostHandleCOM (void)
                         }
                     }
                     else {
-                        lasso_hostInterpreteCommand(0);
+                        if (lasso_hostInterpreteCommand(0)) {
 
-                        response.frame = response.buffer;   // load buffer start
-                        response.Byte_count = response.Bytes_total; // trigger transmission
+                            response.frame = response.buffer;           // load buffer start
+                            response.Byte_count = response.Bytes_total; // trigger transmission
 
-                    #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
-                        response.COBS_backup = response.buffer[2];
-                    #endif
+                        #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
+                            response.COBS_backup = response.buffer[2];
+                        #endif
+                    
+                            response.permission = false;    // lock response frame buffer                     
+                        }
                     }
                 }
                 #if (LASSO_HOST_COMMAND_CRC_ENABLE == 1)
@@ -2889,10 +2897,8 @@ void lasso_hostHandleCOM (void)
                 }
                 #endif
 
-                receiveValid = 0;
+                receiveValid = 0;             
             }
-                
-            response.permission = false;
         }
     }
 

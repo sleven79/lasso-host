@@ -25,6 +25,15 @@
 static uint8 DMA_CH;
 static uint8 DMA_TD;
     
+    
+//-------------------//
+// Private functions //
+//-------------------//    
+    
+CY_ISR(LASSO_UART_ISR) { 
+    lasso_hostSignalFinishedCOM();
+}    
+    
 
 //------------------//
 // Module functions //
@@ -56,7 +65,8 @@ int32_t lasso_comSetup_PSoC5(void)
     CyDmaChSetInitialTd(DMA_CH, DMA_TD);
     
     // init transfer end interupt (todo)
-    //isr_lasso_end_StartEx(isr_end_buffer_0);    
+    lasso_uart_isr_StartEx(LASSO_UART_ISR);    
+    lasso_uart_isr_ClearPending();
 
     return 0;
 }
@@ -86,10 +96,10 @@ int32_t lasso_comCallback_PSoC5(uint8_t* src, uint32_t cnt)
         */
         
         // configure transaction descriptor (transfer count = cnt, disable channel after transaction, generate transfer end signal
-        //CyDmaTdSetConfiguration(DMA_TD, cnt, CY_DMA_DISABLE_TD, LASSO_DMA__TD_TERMOUT_EN | CY_DMA_TD_INC_SRC_ADR);
+        CyDmaTdSetConfiguration(DMA_TD, cnt, CY_DMA_DISABLE_TD, LASSO_DMA__TD_TERMOUT_EN | CY_DMA_TD_INC_SRC_ADR);
         
         // configure transaction descriptor (transfer count = cnt), disable channel after transaction, do not generate transfer end signal
-        CyDmaTdSetConfiguration(DMA_TD, cnt, CY_DMA_DISABLE_TD, CY_DMA_TD_INC_SRC_ADR);         
+        //CyDmaTdSetConfiguration(DMA_TD, cnt, CY_DMA_DISABLE_TD, CY_DMA_TD_INC_SRC_ADR);         
         
         // set source and destination address in transaction descriptor
         // Note: UART component must be called "LASSO_UART"
