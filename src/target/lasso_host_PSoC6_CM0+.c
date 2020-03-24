@@ -43,12 +43,9 @@ void LASSO_ISR_handler(void) {
     }
 }    
     
-void LASSO_UART_ISR_handler(void) {
-#if (LASSO_HOST_NOTIFICATION_USE_PRINTF == 1)    
-    notification_ready = lasso_hostSignalFinishedCOM();
-#else
-    lasso_hostSignalFinishedCOM();    
-#endif
+void LASSO_DMA_ISR_handler(void) {   
+    lasso_hostSignalFinishedCOM();
+    LASSO_DMA_ClearInterrupt();
 }
     
     
@@ -91,11 +88,13 @@ int32_t lasso_comSetup_PSoC6(void)
     NVIC_EnableIRQ(LASSO_ISR_cfg.intrSrc);     
     
     // start ISR for DMA transmission end
-    if (CY_SYSINT_SUCCESS != Cy_SysInt_Init(&LASSO_UART_ISR_cfg, &LASSO_UART_ISR_handler)) {
+    if (CY_SYSINT_SUCCESS != Cy_SysInt_Init(&LASSO_DMA_ISR_cfg, &LASSO_DMA_ISR_handler)) {
         while(1); // Handle possible errors
     }
-    NVIC_ClearPendingIRQ(LASSO_UART_ISR_cfg.intrSrc);
-    NVIC_EnableIRQ(LASSO_UART_ISR_cfg.intrSrc);    
+    NVIC_ClearPendingIRQ(LASSO_DMA_ISR_cfg.intrSrc);
+    NVIC_EnableIRQ(LASSO_DMA_ISR_cfg.intrSrc);    
+    
+    LASSO_DMA_SetInterruptMask(LASSO_DMA_INTR_MASK);    
     
     return 0;
 }
@@ -121,6 +120,9 @@ int32_t lasso_comCallback_PSoC6(uint8_t* src, uint32_t cnt)
         }
         */
         
+        // reset current descriptor to first descriptor
+        LASSO_DMA_SetDescriptor(&LASSO_DMA_Descriptor_1);
+        
         // set source address (destination address is already set)        
         LASSO_DMA_SetSrcAddress(&LASSO_DMA_Descriptor_1, (const void*)src);
         
@@ -141,14 +143,14 @@ int32_t lasso_comCallback_PSoC6(uint8_t* src, uint32_t cnt)
                 LASSO_DMA_SetXloopDataCount(&LASSO_DMA_Descriptor_2, remainder);     
             }
             else {
-                LASSO_DMA_SetNextDescriptor(&LASSO_DMA_Descriptor_1);
+                LASSO_DMA_SetNextDescriptor(NULL);
                 LASSO_DMA_SetChannelState(&LASSO_DMA_Descriptor_1, CY_DMA_CHANNEL_DISABLED);                
             }
         }
         else {
             LASSO_DMA_SetXloopDataCount(&LASSO_DMA_Descriptor_1, cnt);            
             LASSO_DMA_SetYloopDataCount(&LASSO_DMA_Descriptor_1, 1);
-            LASSO_DMA_SetNextDescriptor(&LASSO_DMA_Descriptor_1);
+            LASSO_DMA_SetNextDescriptor(NULL);
             LASSO_DMA_SetChannelState(&LASSO_DMA_Descriptor_1, CY_DMA_CHANNEL_DISABLED);
         }            
         

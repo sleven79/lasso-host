@@ -282,7 +282,6 @@ int32_t lasso_hostReceiveByte (
 );
 
 #if (LASSO_HOST_NOTIFICATIONS == 1)
-#if (LASSO_HOST_NOTIFICATION_USE_PRINTF == 1)
 /*!
  *  \brief  Send a notification (error/debug msg) to Lasso client.
  *
@@ -291,6 +290,13 @@ int32_t lasso_hostReceiveByte (
 int32_t lasso_hostSendNotification (
     const char* msg             //!< notification string
 );
+
+/*!
+*  \brief  Check if Lasso Host is ready for transmission of a notification.
+*    
+*  \return True/False
+*/
+bool lasso_hostReadyForNotification (void);
 #endif
 
 /*!
@@ -298,19 +304,9 @@ int32_t lasso_hostSendNotification (
 *    
 *  Note: to be called by user code after transmission of each frame.
 *
-*  \return True if next notification can be sent. False otherwise.
-*/
-bool lasso_hostSignalFinishedCOM(void);  
-#else
-/*!
-*  \brief  Signal to Lasso host that serial COM has finished transmitting.
-*    
-*  Note: to be called by user code after transmission of each frame.
-*
 *  \return Void
 */
-void lasso_hostSignalFinishedCOM(void);  
-#endif
+void lasso_hostSignalFinishedCOM (void);  
 
 /*!
  *  \brief  Synchronize strobe to external data space.

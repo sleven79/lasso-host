@@ -302,7 +302,7 @@ static lasso_ctlCallback ctlCallback = NULL;    //!< controls changed
 static lasso_cmdCallback cmdCallback = NULL;    //!< command received
 
 static dataFrame strobe = \
-    { LASSO_HOST_STROBE_PERIOD_TICKS, 0, true, NULL, NULL, 0, 0, 0};
+    { LASSO_HOST_ADVERTISE_PERIOD_TICKS, 0, true, NULL, NULL, 0, 0, 0};
 
 static dataFrame response = \
     { LASSO_HOST_ROUNDTRIP_LATENCY_TICKS, 0, true, NULL, NULL, 0, \
@@ -2537,36 +2537,31 @@ int32_t lasso_hostReceiveByte (
  *  \brief  Signal to Lasso host that serial COM has finished transmitting.
  *    
  *   Notes: to be called by user code after transmission of each frame.
- *          When notifications are enabled, returns True if ready for next.
  *
- *  \return None or True/False
+ *  \return None
  */
-#if (LASSO_HOST_NOTIFICATION_USE_PRINTF == 1)
-bool lasso_hostSignalFinishedCOM(void) {    
-#else
 void lasso_hostSignalFinishedCOM(void) {
-#endif
-    // re-enable frame buffer write access for strobe and notification
+    // re-enable frame buffer write access
     if (lastFrame) {
         if (lastFrame->Byte_count == 0) {
-            lastFrame->permission = true;
-
-#if (LASSO_HOST_NOTIFICATION_USE_PRINTF == 1)        
-            if (lastFrame == &notification) {
-                return true;
-            }                        
+            lastFrame->permission = true;                      
         }        
     }
-
-    return false;
-#else
-        }
-    }        
-#endif
 }
 
 
 #if (LASSO_HOST_NOTIFICATIONS == 1)   
+    
+/*!
+*  \brief  Check if Lasso Host is ready for transmission of a notification.
+*    
+*  \return True/False
+*/
+bool lasso_hostReadyForNotification (void) {
+    return ((!lasso_advertise) && (notification.permission));
+}
+    
+    
 #if (LASSO_HOST_NOTIFICATION_USE_PRINTF == 1)   
 /*!
  *  \brief  Add _write() function for printf() functionality (GCC compiler).
@@ -2828,8 +2823,12 @@ void lasso_hostHandleCOM (void)
         if (strobe.countdown == 0) {
             strobe.countdown = lasso_advertise_period_ticks;
 
-            strobe.frame = (uint8_t*)&lasso_signature;      // load buffer start
-            strobe.Byte_count = sizeof(lasso_signature);    // load Byte count
+            if (strobe.permission) {
+                strobe.frame = (uint8_t*)&lasso_signature;      // load buffer start
+                strobe.Byte_count = sizeof(lasso_signature);    // load Byte count
+                
+                strobe.permission = false;
+            }
         }
     }
     else
