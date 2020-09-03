@@ -45,7 +45,7 @@
 // Includes //
 //----------//
 
-#include "cobs.h"
+#include "encodings/cobs.h"
 
 
 //-----------------//

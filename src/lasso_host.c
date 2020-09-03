@@ -133,15 +133,15 @@
 #include <string.h>
 
 #if (LASSO_HOST_PROCESSING_MODE == LASSO_MSGPACK_MODE)
-    #include "msgpack.h"
+    #include "msgpack/msgpack.h"
 #endif
 
 #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_COBS)
-    #include "cobs.h"
+    #include "encodings/cobs.h"
 #endif
 
 #if (LASSO_HOST_COMMAND_ENCODING == LASSO_ENCODING_ESCS)
-    #include "escs.h"
+    #include "encodings/escs.h"
 #endif
 
 
