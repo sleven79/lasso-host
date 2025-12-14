@@ -48,22 +48,17 @@ static volatile uint32_t bufcnt = 0;
 /******************************************************************************/
     
 CY_ISR(LASSO_ISR) { 
-#if (LASSO_HOST_ISR_PERIOD_DIVIDER == 1)    
-    static volatile uint32_t scaler = 0;
- 
-    if (scaler == 0) {
-        scaler = LASSO_HOST_ISR_PERIOD_DIVIDER; // divider must be integer !
+#if (LASSO_HOST_ISR_PERIOD_DIVIDER > 1)    
+    static uint8_t c = LASSO_HOST_ISR_PERIOD_DIVIDER;
+    if (c-- == 0) {
 #else
     {
 #endif
         lasso_hostHandleCOM();
-#if (LASSO_HOST_ISR_PERIOD_DIVIDER == 1)    
+#if (LASSO_HOST_ISR_PERIOD_DIVIDER > 1)        
+        c = LASSO_HOST_ISR_PERIOD_DIVIDER;
+#endif    
     }
-    
-    scaler--;
-#else
-    }
-#endif
     LASSO_CLK_ClearInterrupt(LASSO_CLK_INTR_MASK_TC); 
 }
 

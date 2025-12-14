@@ -25,7 +25,7 @@ import subprocess
 import re
 
 #gitpath = os.getenv('GITPATH', 'C:/Users/s.leven/AppData/Local/GitHubDesktop/app-1.6.2/resources/app/git/cmd')
-gitpath = os.getenv('GITPATH', 'C:/Users/Severin/AppData/Local/GitHubDesktop/app-1.6.5/resources/app/git/cmd')
+gitpath = os.getenv('GITPATH', 'C:/Users/SéverinLeven/AppData/Local/GitHubDesktop/app-3.4.2/resources/app/git/cmd')
 
 def get_git_revision_hash():
     return subprocess.check_output([gitpath + '/git', 'rev-parse', 'HEAD'])
